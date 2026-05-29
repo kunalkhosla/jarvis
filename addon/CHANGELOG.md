@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.17.0
+- **A failing service call no longer aborts the whole eval.** `call_service` (and `notify`) errors are
+  caught and fed back to the agent as a tool result, so a single bad call (e.g. a 400 on one sprinkler
+  zone) lets it adjust and keep handling the rest instead of crashing the run.
+- **`max_tokens` 1024 → 4096** so multi-action turns (e.g. starting many zones at once) aren't
+  truncated mid-output (`stop_reason=max_tokens`).
+- **Stop watching actually works now** (two ways): a deterministic phrase-detector in the voice bridge
+  ("stop watching" / "remove all watches" / "stand down") cancels watches with no LLM involved, and a
+  new `cancel_watch` tool lets the agent stand watches down itself. Previously "remove all watches" was
+  mis-read as a request to *create* a watch (the word "watch" matched the create intent), so it never
+  stopped.
+
 ## 0.16.0
 - **Prompt caching** on the agent loop — two `cache_control` breakpoints: one on the system block
   caches the static TOOLS + system prefix across evals (5-min TTL covers back-to-back watch/heartbeat

@@ -14,6 +14,9 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
   Yes; don't claim it's done). If it returns "[paused]", Cooper's kill-switch is on — tell the user
   it's paused and you didn't act. Never invent entities.
 - Only act when the goal warrants it; for watch-goals, often the right answer is "nothing to do".
+- STOP WATCHING: to stop watching / remove or cancel a watch / stand down, you MUST call cancel_watch
+  (omit "match" to clear ALL watches, or pass a phrase to target specific ones). Saying you stopped is
+  NOT enough — the watch keeps re-checking until cancel_watch actually removes it.
 - CAMERAS: the detection sensors (binary_sensor *_person / *_motion / *_occupancy) only tell you
   SOMETHING happened. To know WHAT, use look_at_camera to actually see the scene, then describe
   who/what is there before deciding or alerting. Prefer the camera nearest the triggered sensor.
@@ -62,6 +65,8 @@ const TOOLS: Anthropic.Tool[] = [
       properties: { after_seconds: { type: "number" }, domain: { type: "string" }, service: { type: "string" }, data: { type: "object" }, note: { type: "string" } } } } } } },
   { name: "notify", description: "Send a push notification. 'camera' (entity_id/name) attaches a live photo. 'priority' sets urgency by YOUR judgment of severity: normal=routine FYI, high=wants attention now (visitor/package), critical=genuine safety only (intruder/smoke/flood) — critical bypasses silent & Do-Not-Disturb and sounds the alarm channel.",
     input_schema: { type: "object", required: ["message"], properties: { message: { type: "string" }, camera: { type: "string" }, priority: { type: "string", enum: ["normal", "high", "critical"] } } } },
+  { name: "cancel_watch", description: "Stand down / cancel active watch-goals so they stop running and stop re-checking. Omit 'match' to cancel ALL watches; pass a phrase to cancel only watches whose text matches it. Call this whenever the user asks to stop watching, remove/cancel a watch, or stand down.",
+    input_schema: { type: "object", properties: { match: { type: "string" } } } },
   { name: "finish", description: "End: summarize what you did / decided.",
     input_schema: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } } },
 ];
@@ -87,6 +92,8 @@ function resolveCameras(raw: string, known: Set<string>, bad: Set<string> = new 
 export interface Hooks {
   paused?: () => boolean;
   requestConfirm?: (domain: string, service: string, data: Record<string, unknown>, reason: string) => string;
+  /** Stand down / cancel watch-goals. Omit match to cancel ALL; pass a phrase to target a subset. */
+  cancelWatches?: (match?: string) => string;
 }
 
 export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget, hooks?: Hooks): Promise<string> {
@@ -135,7 +142,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
   for (let step = 0; step < 12; step++) {
     rollCache(messages);
     const res = await anthropic.messages.create({
-      model: cfg.model, max_tokens: 1024, system,
+      model: cfg.model, max_tokens: 4096, system, // 4096: room for multi-action turns (e.g. many sprinkler zones) without truncating
       tools: [...TOOLS, WEB_SEARCH] as Anthropic.MessageCreateParams["tools"], messages,
     });
     budget?.recordCall(Date.now(), res.usage);
@@ -155,6 +162,10 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
       const a = t.input as any;
       let out = "";
       if (t.name === "finish") { L(`${C.green}${C.bold}✔ finish:${C.reset}${C.green} ${a.summary}${C.reset}`); return a.summary; }
+      else if (t.name === "cancel_watch") {
+        out = hooks?.cancelWatches ? hooks.cancelWatches(typeof a.match === "string" ? a.match : undefined) : "cannot cancel watches in this context";
+        L(`    ${C.yellow}🛑 cancel_watch(${a.match ?? "all"}) -> ${out}${C.reset}`); log.push(out);
+      }
       else if (t.name === "get_live_context") {
         const ents = await ha.liveContext(a.domains);
         const compact = ents.map((e) => {
@@ -225,7 +236,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         else if (pr === "critical" || pr === "emergency") // bypass silent/DND, sound the alarm channel
           Object.assign(data, { importance: "high", priority: "high", ttl: 0, channel: "alarm_stream" });
         if (!cfg.notifyTargets.length) out = "[no notify_targets configured] " + a.message;
-        else { for (const tgt of cfg.notifyTargets) await ha.notify(tgt, "Cooper", a.message, data); out = `notified[${pr}]` + (data.image ? " (+photo)" : ""); }
+        else { try { for (const tgt of cfg.notifyTargets) await ha.notify(tgt, "Cooper", a.message, data); out = `notified[${pr}]` + (data.image ? " (+photo)" : ""); } catch (e) { out = `notify failed: ${String(e).slice(0, 150)}`; } }
         L(`    ${C.magenta}📲 notify[${pr}]${data.image ? " 📸" : ""} -> ${out}${C.reset}`); log.push(out);
       } else if (t.name === "call_service") {
         const ids: string[] = [a.data?.entity_id].flat().filter(Boolean);
@@ -241,7 +252,12 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
           else out = `DEFERRED for user confirmation: ${a.domain}.${a.service} (${a.reason})`;
         }
         else if (cfg.observeMode) out = `[observe] would call ${a.domain}.${a.service} ${JSON.stringify(a.data ?? {})}`;
-        else { await ha.callService(a.domain, a.service, a.data ?? {}); out = "done"; }
+        else {
+          // A single failing service call must NOT abort the whole eval — feed the error back as a
+          // tool result so the agent can adjust (wrong service/params/entity) and keep going.
+          try { await ha.callService(a.domain, a.service, a.data ?? {}); out = "done"; }
+          catch (e) { out = `ERROR: ${a.domain}.${a.service} failed (${String(e).slice(0, 200)}) — NOT done. Fix the service/params/entity and retry, or skip it; keep handling the other actions.`; }
+        }
         const oc = out === "done" ? C.green : out.startsWith("ERROR") || out.startsWith("REFUSED") ? C.red : C.yellow;
         L(`    ${oc}⚙ call_service ${a.domain}.${a.service} [${tier}] -> ${out}${C.reset}`); log.push(`${a.domain}.${a.service} [${tier}] -> ${out}`);
       }

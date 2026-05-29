@@ -126,6 +126,9 @@ function interesting(entityId: string, st: EntityState): boolean {
 
 const WATCH_REQUEST = "input_text.cooper_watch_request"; // bridge from the HA conversation agent
 const WATCH_INTENT = /\b(watch|keep an eye|monitor|guard|look after|alert me|notify me if|let me know if|keep watch)\b/i;
+// Stop/stand-down intent. Checked BEFORE WATCH_INTENT (the word "watch" appears in both "watch the
+// cameras" and "stop watching") — deterministic, no LLM, so turning watches off always works.
+const STOP_INTENT = /\b(stop|cancel|remove|delete|clear|disable|end|quit|turn\s*off|forget)\b[^.]{0,24}\b(watch|watching|watches|monitor|monitoring|keeping an eye|guard)\b|\bstand[\s-]?down\b/i;
 const PAUSE_SWITCH = "input_boolean.cooper_pause"; // kill-switch: ON = halt all device actions
 const notifyAll = (msg: string) => { for (const tgt of cfg.notifyTargets) ha.notify(tgt, "Cooper", msg).catch(() => {}); };
 
@@ -169,7 +172,14 @@ ha.onEvent("mobile_app_notification_action", async (d) => {
   catch (e) { notifyAll(`Couldn't do ${p.domain}.${p.service}: ${e}`); }
 });
 
-const hooks: Hooks = { paused: () => paused, requestConfirm };
+const hooks: Hooks = {
+  paused: () => paused,
+  requestConfirm,
+  cancelWatches: (match?: string) => {
+    const { n, texts } = removeWatches(Date.now(), match);
+    return n ? `stood down ${n} watch(es): ${texts.join("; ")}` : "no active watches matched";
+  },
+};
 
 // Self-provision the voice bridge on first run, so setup is one paste (the routing prompt), not a
 // manual helper + script + exposure. Idempotent: only creates what's missing.
@@ -204,6 +214,14 @@ ha.subscribe((entityId, st) => {
     const text = st.state.trim();
     const tnow = Date.now();
     ha.callService("input_text", "set_value", { entity_id: WATCH_REQUEST, value: "" }).catch(() => {}); // clear early
+    // Stop/stand-down — deterministic, no LLM. Must win over WATCH_INTENT ("watch" is in both).
+    if (STOP_INTENT.test(text)) {
+      const { n } = removeWatches(tnow);
+      header(`🛑 stop-watch from phone: "${text}" → cancelled ${n} watch(es)`);
+      store.logAction(tnow, null, "bridge:stop", text);
+      notifyAll(n ? `Stopped ${n} watch${n > 1 ? "es" : ""}.` : "No active watches to stop.");
+      return;
+    }
     const isWatch = wantsStandingWhileAway(text) || wantsPresenceStandDown(text) || WATCH_INTENT.test(text);
     if (isWatch) {
       const g = store.addGoal(text, tnow, tnow, parseExpiry(text, tnow), wantsPresenceStandDown(text), wantsStandingWhileAway(text));
@@ -233,6 +251,19 @@ ha.subscribe((entityId, st) => {
   if (timer) clearTimeout(timer);
   timer = setTimeout(processBuffer, 3000); // debounce: settle 3s after the last event
 });
+
+// Cancel watch-goals on demand ("stop watching" / cancel_watch tool). Deterministic — used by both
+// the phone stop-intent and the agent's cancelWatches hook. Omit match to clear ALL watches.
+function removeWatches(now: number, match?: string): { n: number; texts: string[] } {
+  const m = match?.toLowerCase().trim();
+  const victims = goals.filter((g) => g.type === "watch" && (!m || g.text.toLowerCase().includes(m)));
+  for (const g of [...victims]) {
+    goals.splice(goals.indexOf(g), 1); store.deleteGoal(g.id); armed.delete(g.id);
+    store.logAction(now, g.id, "watch:cancel", g.text);
+    log(`${C.yellow}🛑 cancelled watch #${g.id}: "${g.text}"${C.reset}`);
+  }
+  return { n: victims.length, texts: victims.map((g) => g.text) };
+}
 
 // Remove a goal everywhere and tell the user why.
 function standDown(g: Goal, now: number, kind: string, msg: string) {
