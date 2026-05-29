@@ -54,11 +54,11 @@ export class HaClient {
     return b ? { base64: b, mediaType: "image/jpeg" } : null;
   }
 
-  /** Push a notification. `image` (an HA path like /api/camera_proxy/camera.x) attaches a photo —
-   *  the mobile app fetches and renders it inline. */
-  notify = (target: string, title: string, message: string, image?: string) =>
+  /** Push a notification. `data` is the companion-app data object (image, importance, channel, …)
+   *  — e.g. { image: "/api/camera_proxy/camera.x", importance: "high", channel: "alarm_stream" }. */
+  notify = (target: string, title: string, message: string, data?: Record<string, unknown>) =>
     this.callService("notify", target.replace(/^notify\./, ""), {
-      title, message, ...(image ? { data: { image } } : {}),
+      title, message, ...(data && Object.keys(data).length ? { data } : {}),
     });
 
   /** Subscribe to state_changed events; calls cb(entity_id, newState) on each change. */

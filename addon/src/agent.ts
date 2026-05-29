@@ -21,6 +21,10 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
   PRIVACY: only look at indoor cameras when the goal explicitly calls for it; default to outdoor.
 - When you ALERT about something you saw on a camera, pass that camera as notify's "camera" arg so
   the user gets the PHOTO alongside your message.
+- Choose notify "priority" by your own judgment of severity: normal for routine FYIs; high for
+  things that want attention soon (a visitor, a package, garage left open); critical ONLY for
+  genuine safety (an unrecognized person while away, someone at night, smoke/fire/flood/leak) —
+  critical bypasses silent & Do-Not-Disturb, so do not overuse it.
 - You have built-in web search for live external facts. Use notify to alert the user. Call finish when done.
 - REPORT FAITHFULLY from tool results: if call_service returns "[observe]" the action was NOT
   performed (observe mode) — say you *would* do it, never claim you did. If it returns "DEFERRED",
@@ -34,8 +38,8 @@ const TOOLS: Anthropic.Tool[] = [
       properties: { domain: { type: "string" }, service: { type: "string" }, data: { type: "object" }, reason: { type: "string" } } } },
   { name: "look_at_camera", description: "See live camera snapshot(s). Pass camera entity_ids or names (e.g. ['driveway','aarlo_kitchen']); returns the current image(s) for you to describe. Max 4 per call.",
     input_schema: { type: "object", required: ["cameras"], properties: { cameras: { type: "array", items: { type: "string" } } } } },
-  { name: "notify", description: "Send a push notification to the user. Optionally attach a camera's live photo via 'camera' (entity_id or name) so the alert shows the image.",
-    input_schema: { type: "object", required: ["message"], properties: { message: { type: "string" }, camera: { type: "string" } } } },
+  { name: "notify", description: "Send a push notification. 'camera' (entity_id/name) attaches a live photo. 'priority' sets urgency by YOUR judgment of severity: normal=routine FYI, high=wants attention now (visitor/package), critical=genuine safety only (intruder/smoke/flood) — critical bypasses silent & Do-Not-Disturb and sounds the alarm channel.",
+    input_schema: { type: "object", required: ["message"], properties: { message: { type: "string" }, camera: { type: "string" }, priority: { type: "string", enum: ["normal", "high", "critical"] } } } },
   { name: "finish", description: "End: summarize what you did / decided.",
     input_schema: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } } },
 ];
@@ -121,11 +125,15 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
       else if (t.name === "notify") {
         // Notify is how Cooper TALKS to you — it always fires, even in observe mode (which only
         // suppresses device actions). Optionally attach the live camera photo.
-        let image: string | undefined;
-        if (a.camera) { await ensureIds(); const ent = resolveCamera(a.camera, knownIds!); if (ent) image = `/api/camera_proxy/${ent}`; }
+        const data: Record<string, unknown> = {};
+        if (a.camera) { await ensureIds(); const ent = resolveCamera(a.camera, knownIds!); if (ent) data.image = `/api/camera_proxy/${ent}`; }
+        const pr = String(a.priority ?? "normal").toLowerCase();
+        if (pr === "high") Object.assign(data, { importance: "high", priority: "high", ttl: 0 });
+        else if (pr === "critical" || pr === "emergency") // bypass silent/DND, sound the alarm channel
+          Object.assign(data, { importance: "high", priority: "high", ttl: 0, channel: "alarm_stream" });
         if (!cfg.notifyTargets.length) out = "[no notify_targets configured] " + a.message;
-        else { for (const tgt of cfg.notifyTargets) await ha.notify(tgt, "Cooper", a.message, image); out = "notified" + (image ? " (+photo)" : ""); }
-        L(`    ${C.magenta}📲 notify${image ? " 📸" : ""} -> ${out}${C.reset}`); log.push(out);
+        else { for (const tgt of cfg.notifyTargets) await ha.notify(tgt, "Cooper", a.message, data); out = `notified[${pr}]` + (data.image ? " (+photo)" : ""); }
+        L(`    ${C.magenta}📲 notify[${pr}]${data.image ? " 📸" : ""} -> ${out}${C.reset}`); log.push(out);
       } else if (t.name === "call_service") {
         const ids: string[] = [a.data?.entity_id].flat().filter(Boolean);
         await ensureIds();
