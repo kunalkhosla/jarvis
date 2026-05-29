@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Cooper">
+  <!-- House silhouette with a watchful camera-lens cut out of it -->
+  <path fill="#15171C" fill-rule="evenodd"
+        d="M32 5.5 L58.5 26 L58.5 56.5 A2 2 0 0 1 56.5 58.5 L7.5 58.5 A2 2 0 0 1 5.5 56.5 L5.5 26 Z
+           M32 23 A12 12 0 1 0 32 47 A12 12 0 1 0 32 23 Z"/>
+  <!-- The pupil: a calm, warm presence, gaze settled slightly low -->
+  <circle cx="32" cy="37" r="5.2" fill="#EDA13A"/>
+  <circle cx="29.4" cy="34.4" r="1.6" fill="#F6F4EF"/>
+</svg>

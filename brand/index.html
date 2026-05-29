@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cooper — brand</title>
+<link rel="icon" href="cooper-icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#15171C; --ink2:#1E2128; --line:#2C3038;
+    --amber:#EDA13A; --amber-soft:#F4BD6E;
+    --paper:#F6F4EF; --paper2:#ECE8DF; --muted:#8A8F99;
+    --display:'Bricolage Grotesque',system-ui,sans-serif;
+    --body:'Hanken Grotesk',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:var(--body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.5}
+  .wrap{max-width:980px;margin:0 auto;padding:0 28px}
+  .eyebrow{font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);font-weight:600}
+
+  /* ---- hero (dark) ---- */
+  .hero{background:var(--ink);color:var(--paper);padding:84px 0 76px;position:relative;overflow:hidden}
+  .hero::after{content:"";position:absolute;inset:0;background:
+    radial-gradient(420px 300px at 78% 22%, rgba(237,161,58,.16), transparent 70%);pointer-events:none}
+  .lockup{display:flex;align-items:center;gap:22px}
+  .lockup .mark{width:84px;height:84px;flex:none}
+  .lockup .word{font-family:var(--display);font-weight:600;font-size:72px;letter-spacing:-.045em;line-height:1}
+  .hero .tag{margin-top:30px;font-size:20px;color:var(--amber-soft);font-weight:500;max-width:30ch}
+  .hero .sub{margin-top:14px;color:#A7ACB6;max-width:54ch;font-size:15.5px}
+
+  /* ---- sections ---- */
+  section{padding:64px 0;border-bottom:1px solid var(--paper2)}
+  h2{font-family:var(--display);font-weight:600;font-size:26px;letter-spacing:-.02em;margin-bottom:6px}
+  .lead{color:#5C616B;margin-bottom:30px;max-width:60ch}
+  .grid{display:grid;gap:20px}
+  .card{border:1px solid var(--paper2);border-radius:18px;padding:30px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center}
+  .card .cap{font-size:13px;color:var(--muted)}
+  .two{grid-template-columns:1fr 1fr}
+  .card.dark{background:var(--ink);border-color:var(--ink)}
+  .card.dark .cap{color:#888E99}
+  .card.dark .word{color:var(--paper)}
+  .row{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+
+  .word{font-family:var(--display);font-weight:600;letter-spacing:-.045em;line-height:1;color:var(--ink)}
+  .mini-lockup{display:flex;align-items:center;gap:12px}
+  .mini-lockup svg{width:40px;height:40px}
+  .mini-lockup .word{font-size:34px}
+
+  /* favicon sizes */
+  .sizes{display:flex;align-items:flex-end;gap:28px;flex-wrap:wrap}
+  .sizes figure{display:flex;flex-direction:column;align-items:center;gap:10px}
+  .sizes svg{display:block}
+  .sizes figcaption{font-size:12px;color:var(--muted)}
+  .chk{background:
+      linear-gradient(45deg,#e9e5dc 25%,transparent 25%),linear-gradient(-45deg,#e9e5dc 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#e9e5dc 75%),linear-gradient(-45deg,transparent 75%,#e9e5dc 75%);
+    background-size:12px 12px;background-position:0 0,0 6px,6px -6px,-6px 0;border-radius:8px;padding:8px}
+
+  /* mono swatches */
+  .mono{display:flex;gap:18px;flex-wrap:wrap}
+  .mono div{width:108px;height:108px;border-radius:16px;display:grid;place-items:center;border:1px solid var(--paper2)}
+  .mono svg{width:58px;height:58px}
+
+  /* palette */
+  .pal{display:flex;gap:16px;flex-wrap:wrap}
+  .sw{border:1px solid var(--paper2);border-radius:14px;overflow:hidden;width:150px}
+  .sw .chip{height:84px}
+  .sw .meta{padding:12px 14px}
+  .sw .meta b{font-family:var(--display);font-weight:600;font-size:14px}
+  .sw .meta code{display:block;color:var(--muted);font-size:12px;margin-top:3px;font-family:ui-monospace,monospace}
+
+  ul.tags{list-style:none;display:flex;flex-direction:column;gap:12px}
+  ul.tags li{font-family:var(--display);font-weight:500;font-size:20px;letter-spacing:-.01em}
+  ul.tags li::before{content:"—  ";color:var(--amber)}
+  footer{padding:40px 0 64px;color:var(--muted);font-size:13px}
+  @media(max-width:640px){.two{grid-template-columns:1fr}.lockup .word{font-size:52px}.lockup .mark{width:64px;height:64px}}
+</style>
+</head>
+<body>
+
+<!-- define the icon once as a reusable symbol -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="cooper" viewBox="0 0 64 64">
+    <path fill="var(--mk,#15171C)" fill-rule="evenodd"
+      d="M32 5.5 L58.5 26 L58.5 56.5 A2 2 0 0 1 56.5 58.5 L7.5 58.5 A2 2 0 0 1 5.5 56.5 L5.5 26 Z
+         M32 23 A12 12 0 1 0 32 47 A12 12 0 1 0 32 23 Z"/>
+    <circle cx="32" cy="37" r="5.2" fill="var(--pp,#EDA13A)"/>
+    <circle cx="29.4" cy="34.4" r="1.6" fill="var(--ct,#F6F4EF)"/>
+  </symbol>
+  <symbol id="cooper-mono" viewBox="0 0 64 64">
+    <path fill="currentColor" fill-rule="evenodd"
+      d="M32 5.5 L58.5 26 L58.5 56.5 A2 2 0 0 1 56.5 58.5 L7.5 58.5 A2 2 0 0 1 5.5 56.5 L5.5 26 Z
+         M32 23 A12 12 0 1 0 32 47 A12 12 0 1 0 32 23 Z"/>
+    <circle cx="32" cy="37" r="5.2" fill="currentColor"/>
+  </symbol>
+</svg>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow" style="color:#7e8492">Brand</div>
+    <div class="lockup" style="margin-top:26px">
+      <svg class="mark" style="--mk:#F6F4EF;--ct:#15171C"><use href="#cooper"/></svg>
+      <span class="word">Cooper</span>
+    </div>
+    <p class="tag">A home that watches over you.</p>
+    <p class="sub">A Claude-powered home guardian for Home Assistant — it sees through your cameras, reasons with judgment, acts on the safe stuff, and asks before the risky. The mark: a home, with a watchful lens for an eye.</p>
+  </div>
+</header>
+
+<section><div class="wrap">
+  <div class="eyebrow">Primary lockup</div>
+  <h2 style="margin-top:8px">On light & dark</h2>
+  <p class="lead">One restrained accent on ink. The pupil's catch-light keeps the gaze warm, not surveillant.</p>
+  <div class="grid two">
+    <div class="card"><div class="mini-lockup"><svg viewBox="0 0 64 64"><use href="#cooper"/></svg><span class="word">Cooper</span></div><span class="cap">light</span></div>
+    <div class="card dark"><div class="mini-lockup"><svg viewBox="0 0 64 64" style="--mk:#F6F4EF;--ct:#15171C"><use href="#cooper"/></svg><span class="word">Cooper</span></div><span class="cap">dark</span></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Icon</div>
+  <h2 style="margin-top:8px">Scales to a favicon</h2>
+  <p class="lead">House + lens hold up small — at 16px it's a roof and a watching dot.</p>
+  <div class="sizes">
+    <figure><span class="chk"><svg width="96" height="96"><use href="#cooper"/></svg></span><figcaption>96</figcaption></figure>
+    <figure><span class="chk"><svg width="48" height="48"><use href="#cooper"/></svg></span><figcaption>48</figcaption></figure>
+    <figure><span class="chk"><svg width="32" height="32"><use href="#cooper"/></svg></span><figcaption>32</figcaption></figure>
+    <figure><span class="chk"><svg width="16" height="16"><use href="#cooper"/></svg></span><figcaption>16</figcaption></figure>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Single-color</div>
+  <h2 style="margin-top:8px">Works in one ink</h2>
+  <p class="lead">When you can't use the accent — stamps, embroidery, a terminal. The pupil floats in the lens.</p>
+  <div class="mono">
+    <div style="background:var(--paper);color:#15171C"><svg><use href="#cooper-mono"/></svg></div>
+    <div style="background:#15171C;color:var(--paper)"><svg><use href="#cooper-mono"/></svg></div>
+    <div style="background:var(--amber);color:#15171C"><svg><use href="#cooper-mono"/></svg></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Palette</div>
+  <h2 style="margin-top:8px">Ink, paper, one warm signal</h2>
+  <p class="lead">The amber is the only accent — the warmth of a home that's awake.</p>
+  <div class="pal">
+    <div class="sw"><div class="chip" style="background:#15171C"></div><div class="meta"><b>Ink</b><code>#15171C</code></div></div>
+    <div class="sw"><div class="chip" style="background:#EDA13A"></div><div class="meta"><b>Watch Amber</b><code>#EDA13A</code></div></div>
+    <div class="sw"><div class="chip" style="background:#F6F4EF;border-bottom:1px solid #ece8df"></div><div class="meta"><b>Paper</b><code>#F6F4EF</code></div></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Voice</div>
+  <h2 style="margin-top:8px">Tagline options</h2>
+  <ul class="tags" style="margin-top:18px">
+    <li>A home that watches over you.</li>
+    <li>A home you can talk to.</li>
+    <li>Your home, watching — with judgment.</li>
+    <li>The calm layer over your smart home.</li>
+  </ul>
+</div></section>
+
+<footer><div class="wrap">Cooper — files: <code>cooper-icon.svg</code> · <code>cooper-icon-mono.svg</code> · <code>cooper-lockup.svg</code>. Wordmark set in Bricolage Grotesque; outline to paths for production.</div></footer>
+
+</body>
+</html>
