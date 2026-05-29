@@ -1,6 +1,13 @@
-# Cooper
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/cooper-lockup-dark.svg">
+    <img alt="Cooper" src="brand/cooper-lockup.svg" width="300">
+  </picture>
+</p>
 
-**A home you can talk to.** A Claude-powered agent for Home Assistant — you say what you *want*, it figures out the *how*.
+<p align="center"><b>A home you can talk to.</b> A Claude-powered agent for Home Assistant — you say what you <i>want</i>, it figures out the <i>how</i>.</p>
+
+
 
 > **You:** *"I'm leaving for an hour — keep an eye on the cameras."*
 > **Cooper:** *"On it. I'll watch the perimeter and flag anything that moves. Have a good hour."*
