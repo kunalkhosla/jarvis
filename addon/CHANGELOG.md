@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.3
+- Logs: reasoning (💭) lines now use magenta — HA's log viewer doesn't render the 256-color violet
+  from 0.11.2 (it showed plain). Basic ANSI renders reliably.
+
 ## 0.11.2
 - Logs: reasoning lines now use a distinct violet color with a 💭 marker (were washed-out dim),
   so thinking reads apart from tool calls and results.
