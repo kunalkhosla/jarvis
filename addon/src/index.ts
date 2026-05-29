@@ -55,7 +55,20 @@ function interesting(entityId: string, st: EntityState): boolean {
   return WATCH_DOMAINS.has(domain);
 }
 
+const WATCH_REQUEST = "input_text.cooper_watch_request"; // bridge from the HA conversation agent
+
 ha.subscribe((entityId, st) => {
+  // Bridge: phone/voice Cooper writes a watch request into this helper → register a watch-goal.
+  if (entityId === WATCH_REQUEST && st.state && st.state.trim()) {
+    const text = st.state.trim();
+    const g: Goal = { id: nextId++, text, type: "watch", created: Date.now(), lastRun: Date.now() };
+    goals.push(g);
+    log(`📥 watch-goal from HA conversation: "${text}" (#${g.id})`);
+    runGoal(cfg, ha, text, "(initial check — establish what's normal)")
+      .then((r) => log(`   → ${r}`)).catch((e) => log(`   intake error: ${e}`));
+    ha.callService("input_text", "set_value", { entity_id: WATCH_REQUEST, value: "" }).catch(() => {}); // clear for next time
+    return;
+  }
   if (!goals.some((g) => g.type === "watch")) return;
   if (!interesting(entityId, st)) return;
   buffer.push(`${new Date().toISOString()}  ${entityId} -> ${st.state}`);
