@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { loadConfig } from "./config.js";
 import { HaClient, EntityState } from "./ha.js";
 import { runGoal, Hooks } from "./agent.js";
-import { Store, Goal, Task } from "./store.js";
+import { Store, Goal, Task, SeqStep } from "./store.js";
 import { Budget } from "./budget.js";
 import { C, L as log, header } from "./log.js";
 import { parseExpiry, wantsPresenceStandDown, wantsStandingWhileAway, parseTrigger } from "./time.js";
@@ -32,6 +32,11 @@ createServer(async (req, res) => {
       ok: true, observe: cfg.observeMode, budget: budget.stats(Date.now()),
       goals: goals.map((g) => ({ id: g.id, type: g.type, text: g.text, expires: g.expires ? new Date(g.expires).toISOString() : null, untilHome: g.untilPresent || undefined, standing: g.whileAway || undefined, armed: g.whileAway ? (armed.get(g.id) || false) : undefined })),
       tasks: tasks.map((t) => ({ id: t.id, text: t.text, runAt: t.runAt ? new Date(t.runAt).toISOString() : null, onArrival: t.onArrival })),
+      sequences: [...new Set(seqSteps.map((s) => s.seqId))].map((id) => {
+        const steps = seqSteps.filter((s) => s.seqId === id);
+        const pending = steps.filter((s) => !s.fired);
+        return { id, label: steps[0]?.label, steps: steps.length, done: steps.length - pending.length, nextAt: pending.length ? new Date(Math.min(...pending.map((s) => s.runAt))).toISOString() : null };
+      }),
     });
   if (req.method === "POST" && req.url === "/goal") {
     let raw = ""; for await (const c of req) raw += c;
@@ -95,6 +100,12 @@ createServer(async (req, res) => {
     tasks.splice(i, 1); store.deleteTask(id);
     return json(200, { deleted: id });
   }
+  if (req.method === "DELETE" && req.url?.startsWith("/sequence/")) {
+    const id = Number(req.url.split("/")[2]);
+    if (!seqSteps.some((s) => s.seqId === id)) return json(404, { error: "no such sequence" });
+    store.deleteSequence(id); seqSteps = seqSteps.filter((s) => s.seqId !== id);
+    return json(200, { deleted: id });
+  }
   json(404, { error: "not found" });
   } catch (e) { // backstop: no request may ever crash the process
     log(`${C.red}request error: ${e}${C.reset}`);
@@ -134,15 +145,53 @@ const notifyAll = (msg: string) => { for (const tgt of cfg.notifyTargets) ha.not
 
 // ---- Kill-switch + interactive Yes/No confirmation (the guardrail "hooks" the agent calls) ----
 let paused = false; // mirrors PAUSE_SWITCH; updated from state_changed + read at boot
-// Pending scheduled-action timers (from schedule_actions) so a "stop the sequence" can cancel them.
-const scheduledTimers: { t: ReturnType<typeof setTimeout>; label: string }[] = [];
+
+// ---- Scheduled action sequences (timed multi-step plans from schedule_actions) ----
+// Persisted (so they survive restarts), fired by a single tick loop, listable in /healthz, and
+// cancelable as a unit — replaces the old per-step setTimeout sprawl.
+let seqSteps: SeqStep[] = store.seqSteps();
+const STALE_MS = 120_000; // a step overdue by more than this (e.g. the add-on was down) is skipped, not fired
+
+/** Persist + arm a sequence; returns a short summary for the agent. */
+function scheduleSequence(label: string, steps: Array<{ afterSeconds: number; domain: string; service: string; data?: Record<string, unknown>; note?: string }>): string {
+  const now = Date.now();
+  const rows = steps.map((s) => ({ runAt: now + Math.max(0, s.afterSeconds) * 1000, domain: s.domain, service: s.service, data: s.data, note: s.note }));
+  const inserted = store.addSequence(label, rows);
+  seqSteps.push(...inserted);
+  const seqId = inserted[0]?.seqId;
+  const endsAt = Math.max(...rows.map((r) => r.runAt));
+  header(`⏲ sequence #${seqId} armed: ${rows.length} step(s), ends ~${new Date(endsAt).toISOString()}`);
+  store.logAction(now, null, "seq:create", `${label} — ${rows.length} steps`);
+  return `sequence #${seqId}, ${rows.length} steps`;
+}
+
+/** Cancel pending sequences (all, or those whose label matches). Returns # of sequences cancelled. */
 function cancelScheduled(match?: string): number {
   const m = match?.toLowerCase().trim();
-  const victims = scheduledTimers.filter((s) => !m || s.label.toLowerCase().includes(m));
-  for (const s of victims) { clearTimeout(s.t); const i = scheduledTimers.indexOf(s); if (i >= 0) scheduledTimers.splice(i, 1); }
-  if (victims.length) log(`${C.yellow}🛑 cancelled ${victims.length} pending scheduled action(s)${C.reset}`);
-  return victims.length;
+  const ids = [...new Set(seqSteps.filter((s) => !s.fired && (!m || (s.label || "").toLowerCase().includes(m))).map((s) => s.seqId))];
+  for (const id of ids) store.deleteSequence(id);
+  if (ids.length) { seqSteps = seqSteps.filter((s) => !ids.includes(s.seqId)); log(`${C.yellow}🛑 cancelled ${ids.length} scheduled sequence(s)${C.reset}`); }
+  return ids.length;
 }
+
+/** Tick: fire due steps (skip if paused or stale), then prune fully-fired sequences. */
+function fireDueSteps(now: number) {
+  for (const s of seqSteps.filter((x) => !x.fired && now >= x.runAt)) {
+    s.fired = true; store.markStepFired(s.id);
+    if (paused) { log(`${C.yellow}⏲ paused — skipped ${s.domain}.${s.service}${s.note ? ` (${s.note})` : ""}${C.reset}`); continue; }
+    if (now - s.runAt > STALE_MS) { log(`${C.gray}⏲ stale — skipped ${s.domain}.${s.service} (was due ${Math.round((now - s.runAt) / 1000)}s ago)${C.reset}`); continue; }
+    ha.callService(s.domain, s.service, s.data ?? {}).catch(() => {});
+    store.logAction(now, null, "seq:fire", `${s.domain}.${s.service} ${s.note ?? ""}`);
+    log(`${C.green}⏲ fired: ${s.domain}.${s.service} ${JSON.stringify(s.data ?? {})}${s.note ? ` (${s.note})` : ""}${C.reset}`);
+  }
+  // prune sequences whose every step has fired
+  const liveSeqs = new Set(seqSteps.filter((s) => !s.fired).map((s) => s.seqId));
+  const doneSeqs = [...new Set(seqSteps.map((s) => s.seqId))].filter((id) => !liveSeqs.has(id));
+  for (const id of doneSeqs) store.deleteSequence(id);
+  if (doneSeqs.length) seqSteps = seqSteps.filter((s) => !doneSeqs.includes(s.seqId));
+}
+setInterval(() => fireDueSteps(Date.now()), 5000);
+fireDueSteps(Date.now()); // boot: fire (or skip-if-stale) any steps queued before a restart
 const pendingConfirm = new Map<string, { domain: string; service: string; data: Record<string, unknown> }>();
 let confirmSeq = 1;
 const MAX_PENDING_CONFIRMS = 3; // never fan out more than this many Yes/No prompts at once (anti-spam)
@@ -188,15 +237,14 @@ ha.onEvent("mobile_app_notification_action", async (d) => {
 const hooks: Hooks = {
   paused: () => paused,
   requestConfirm,
-  trackTimer: (t, label) => { scheduledTimers.push({ t, label }); },
-  untrackTimer: (t) => { const i = scheduledTimers.findIndex((s) => s.t === t); if (i >= 0) scheduledTimers.splice(i, 1); },
+  scheduleSequence,
   cancelWatches: (match?: string) => {
     const { n, texts } = removeWatches(Date.now(), match);
     const s = cancelScheduled(match);
     const parts: string[] = [];
     if (n) parts.push(`${n} watch(es): ${texts.join("; ")}`);
-    if (s) parts.push(`${s} pending scheduled action(s)`);
-    return parts.length ? `stood down ${parts.join(" and ")}` : "nothing matched — no active watches or scheduled actions";
+    if (s) parts.push(`${s} scheduled sequence(s)`);
+    return parts.length ? `stood down ${parts.join(" and ")}` : "nothing matched — no active watches or scheduled sequences";
   },
 };
 
@@ -237,9 +285,9 @@ ha.subscribe((entityId, st) => {
     if (STOP_INTENT.test(text)) {
       const { n } = removeWatches(tnow);
       const s = cancelScheduled();
-      header(`🛑 stop from phone: "${text}" → cancelled ${n} watch(es), ${s} scheduled action(s)`);
+      header(`🛑 stop from phone: "${text}" → cancelled ${n} watch(es), ${s} scheduled sequence(s)`);
       store.logAction(tnow, null, "bridge:stop", text);
-      notifyAll(n || s ? `Stopped ${n} watch${n !== 1 ? "es" : ""} and ${s} scheduled action${s !== 1 ? "s" : ""}.` : "Nothing active to stop.");
+      notifyAll(n || s ? `Stopped ${n} watch${n !== 1 ? "es" : ""} and ${s} scheduled sequence${s !== 1 ? "s" : ""}.` : "Nothing active to stop.");
       return;
     }
     const isWatch = wantsStandingWhileAway(text) || wantsPresenceStandDown(text) || WATCH_INTENT.test(text);

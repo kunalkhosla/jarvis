@@ -24,6 +24,21 @@ export interface Task {
   onArrival: boolean;     // fire when a household member arrives home
 }
 
+/** One step of a scheduled action SEQUENCE (from schedule_actions) — e.g. a sprinkler zone start, or
+ *  the turn-off that bounds it. Steps sharing a seq_id are one sequence; the host fires them on a tick
+ *  at their absolute run_at, so a sequence survives restarts and can be listed/cancelled as a unit. */
+export interface SeqStep {
+  id: number;
+  seqId: number;
+  label: string;                       // the originating goal — the sequence's human identity
+  runAt: number;                       // absolute epoch ms to fire
+  domain: string;
+  service: string;
+  data: Record<string, unknown> | null;
+  note: string | null;
+  fired: boolean;
+}
+
 /** Where the DB lives. As an HA add-on, /data is the persisted volume; standalone falls back
  *  to the working dir. Override with COOPER_DB. */
 function dbPath(): string {
@@ -65,6 +80,17 @@ export class Store {
         created    INTEGER NOT NULL,
         run_at     INTEGER,
         on_arrival INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS seq_steps (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        seq_id  INTEGER NOT NULL,
+        label   TEXT,
+        run_at  INTEGER NOT NULL,
+        domain  TEXT NOT NULL,
+        service TEXT NOT NULL,
+        data    TEXT,
+        note    TEXT,
+        fired   INTEGER NOT NULL DEFAULT 0
       );
     `);
     // Migrate older DBs that predate later columns (ignore if already present).
@@ -123,5 +149,41 @@ export class Store {
 
   deleteTask(id: number): boolean {
     return this.db.prepare("DELETE FROM tasks WHERE id = ?").run(id).changes > 0;
+  }
+
+  // ---- Scheduled action sequences ----
+  /** All persisted sequence steps, earliest first — loaded into memory at boot (so a sequence
+   *  survives a restart instead of being lost setTimeouts). */
+  seqSteps(): SeqStep[] {
+    const rows = this.db
+      .prepare("SELECT id, seq_id, label, run_at, domain, service, data, note, fired FROM seq_steps ORDER BY run_at")
+      .all() as Array<{ id: number; seq_id: number; label: string; run_at: number; domain: string; service: string; data: string | null; note: string | null; fired: number }>;
+    return rows.map((r) => ({
+      id: r.id, seqId: r.seq_id, label: r.label, runAt: r.run_at, domain: r.domain, service: r.service,
+      data: r.data ? JSON.parse(r.data) : null, note: r.note, fired: !!r.fired,
+    }));
+  }
+
+  /** Persist a sequence as a group of steps under a fresh seq_id; returns the inserted rows (with ids). */
+  addSequence(label: string, steps: Array<{ runAt: number; domain: string; service: string; data?: Record<string, unknown>; note?: string }>): SeqStep[] {
+    const seqId = (this.db.prepare("SELECT COALESCE(MAX(seq_id), 0) + 1 AS n FROM seq_steps").get() as { n: number }).n;
+    const ins = this.db.prepare("INSERT INTO seq_steps (seq_id, label, run_at, domain, service, data, note) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    const out: SeqStep[] = [];
+    this.db.transaction((rows: typeof steps) => {
+      for (const s of rows) {
+        const info = ins.run(seqId, label, s.runAt, s.domain, s.service, s.data ? JSON.stringify(s.data) : null, s.note ?? null);
+        out.push({ id: Number(info.lastInsertRowid), seqId, label, runAt: s.runAt, domain: s.domain, service: s.service, data: s.data ?? null, note: s.note ?? null, fired: false });
+      }
+    })(steps);
+    return out;
+  }
+
+  markStepFired(id: number): void {
+    this.db.prepare("UPDATE seq_steps SET fired = 1 WHERE id = ?").run(id);
+  }
+
+  /** Delete a whole sequence (cancel, or prune once fully fired). */
+  deleteSequence(seqId: number): number {
+    return this.db.prepare("DELETE FROM seq_steps WHERE seq_id = ?").run(seqId).changes;
   }
 }

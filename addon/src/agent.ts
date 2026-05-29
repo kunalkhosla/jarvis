@@ -106,11 +106,11 @@ function resolveCameras(raw: string, known: Set<string>, bad: Set<string> = new 
 export interface Hooks {
   paused?: () => boolean;
   requestConfirm?: (domain: string, service: string, data: Record<string, unknown>, reason: string) => string;
-  /** Stand down watch-goals AND stop pending scheduled actions. Omit match for all; pass a phrase to target a subset. */
+  /** Stand down watch-goals AND stop pending scheduled sequences. Omit match for all; pass a phrase to target a subset. */
   cancelWatches?: (match?: string) => string;
-  /** Register/forget a pending scheduled-action timer so a "stop the sequence" can clearTimeout it. */
-  trackTimer?: (t: ReturnType<typeof setTimeout>, label: string) => void;
-  untrackTimer?: (t: ReturnType<typeof setTimeout>) => void;
+  /** Persist + schedule a timed action sequence (validated, auto-tier steps). The host fires due steps
+   *  on a tick — survives restarts, shows in /healthz, and is cancelable as a unit. Returns a summary. */
+  scheduleSequence?: (label: string, steps: Array<{ afterSeconds: number; domain: string; service: string; data?: Record<string, unknown>; note?: string }>) => string;
 }
 
 export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget, hooks?: Hooks): Promise<string> {
@@ -220,6 +220,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         const steps: any[] = Array.isArray(a.steps) ? a.steps.slice(0, 30) : [];
         await ensureIds();
         const planned: string[] = [];
+        const valid: Array<{ afterSeconds: number; domain: string; service: string; data?: Record<string, unknown>; note?: string }> = [];
         for (const s of steps) {
           const delay = Math.max(0, Number(s.after_seconds) || 0);
           const tier = tierFor(s.domain, s.service);
@@ -227,19 +228,14 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
           const missing = ids.filter((id) => !knownIds!.has(id));
           if (missing.length) { planned.push(`✗ no such entity: ${missing.join(",")}`); continue; }
           if (tier !== "auto") { planned.push(`✗ ${s.domain}.${s.service} needs confirmation — not scheduling`); continue; }
-          // Fire later from the running process (deterministic, no LLM at fire time). Registered with
-          // the host so a "stop the sequence" / cancel_watch can clearTimeout the still-pending steps.
-          const handle = setTimeout(() => {
-            hooks?.untrackTimer?.(handle);
-            if (hooks?.paused?.()) { L(`    ${C.yellow}⏲ paused — skipped ${s.domain}.${s.service}${C.reset}`); return; }
-            ha.callService(s.domain, s.service, s.data ?? {}).catch(() => {});
-            L(`    ${C.green}⏲ fired: ${s.domain}.${s.service} ${JSON.stringify(s.data ?? {})} ${s.note ? `(${s.note})` : ""}${C.reset}`);
-          }, delay * 1000);
-          hooks?.trackTimer?.(handle, `${s.domain}.${s.service}${s.note ? ` (${s.note})` : ""}`);
+          valid.push({ afterSeconds: delay, domain: s.domain, service: s.service, data: s.data, note: s.note });
           planned.push(`+${delay}s ${s.domain}.${s.service} ${s.note ?? ""}`);
         }
-        out = planned.length ? `scheduled ${planned.filter((p) => !p.startsWith("✗")).length}/${steps.length}:\n${planned.join("\n")}` : "no steps";
-        L(`    ${C.cyan}⏲ schedule_actions -> ${steps.length} step(s)${C.reset}`); log.push(`scheduled ${steps.length} timed action(s)`);
+        // Hand the validated steps to the host, which persists them and fires due steps on a tick —
+        // so the sequence survives restarts, shows in /healthz, and cancel_watch can stop it as a unit.
+        const sched = valid.length && hooks?.scheduleSequence ? hooks.scheduleSequence(goal, valid) : "";
+        out = planned.length ? `scheduled ${valid.length}/${steps.length}${sched ? ` (${sched})` : ""}:\n${planned.join("\n")}` : "no steps";
+        L(`    ${C.cyan}⏲ schedule_actions -> ${valid.length}/${steps.length} step(s)${sched ? ` ${sched}` : ""}${C.reset}`); log.push(`scheduled ${valid.length} timed action(s)`);
       }
       else if (t.name === "get_forecast") {
         const fc = await ha.getForecast(a.type === "hourly" ? "hourly" : "daily");

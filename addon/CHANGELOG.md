@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.19.0
+- **Scheduled sequences are now first-class and persisted.** `schedule_actions` no longer spawns a
+  pile of anonymous `setTimeout`s — steps are saved to SQLite (a new `seq_steps` table) and fired by a
+  single tick loop. So a multi-step plan (presence simulation, a multi-zone sprinkler run) **survives a
+  restart / add-on update** instead of being silently lost, and steps overdue from downtime are skipped
+  (not fired late — no 3am watering).
+- **Visible & cancelable.** `/healthz` now lists active `sequences` (label, steps, done, next-step ETA);
+  `DELETE /sequence/:id` cancels one; `cancel_watch` / the voice "stop" cancel sequences as a unit and
+  report real counts.
+
 ## 0.18.0
 - **Running sequences can actually be stopped now.** `schedule_actions` timers are registered with the
   host, so `cancel_watch` (and the voice "stop watching / stand down") now also `clearTimeout`s the
