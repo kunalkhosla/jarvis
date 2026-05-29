@@ -50,3 +50,10 @@ export function parseExpiry(text: string, now: number = Date.now()): number | nu
 
   return null;
 }
+
+/** Does this goal want to stand down when the household returns home? (away/vacation watches) */
+export function wantsPresenceStandDown(text: string): boolean {
+  const t = text.toLowerCase();
+  return /\b(while|when|until|till|til)\b[^.]*\b(out|away|gone|back|home|return|returning|leave|leaving)\b/.test(t)
+    || /\b(while away|while out|on vacation|on holiday|out of town|out of the house|until we'?re back|when we get home|when we'?re back)\b/.test(t);
+}

@@ -26,6 +26,11 @@ export class HaClient {
 
   getStates = (): Promise<EntityState[]> => this.rest("/states");
 
+  /** Household presence entities (person.*). */
+  async persons(): Promise<EntityState[]> {
+    return (await this.getStates()).filter((s) => s.entity_id.startsWith("person."));
+  }
+
   /** A compact, agent-friendly snapshot — drops noise, keeps live controllable entities. */
   async liveContext(domains?: string[]): Promise<EntityState[]> {
     const all = (await this.getStates()) as EntityState[];

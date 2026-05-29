@@ -39,7 +39,8 @@ place and make it look like someone's home."* Cooper runs a time-boxed watch **a
 presence intelligently**: lights, TV and blinds follow your *actual* routines and the sunset,
 varied night to night so it never loops like a robotic timer, winding down at a believable bedtime.
 If a camera catches someone lingering at the gate, it escalates to a **critical** alert with the
-photo. Monday evening, it stands down on its own.
+photo. And it **stands down the moment you're all home again** — not on a guessed clock — with a
+time cap as a backstop.
 
 🤖 **Acts safely.** Reversible things (lights, climate, media, fans) just happen. Risky things
 (locks, alarm, garage, water valve) **always ask first**. Forbidden things **never** happen. Ships
