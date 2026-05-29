@@ -44,6 +44,22 @@ hourly/daily spend caps and live token accounting. **Idle costs nothing.**
 
 See [docs/USE-CASES.md](docs/USE-CASES.md) for the full catalog.
 
+## Why not just automations?
+
+Automations are rules you write in advance — *IF this AND this THEN that*. You can't enumerate
+every situation; there's always one more `IF`. Cooper reasons in the moment instead:
+
+- An automation fires the same for a raccoon, a delivery, and a stranger. Cooper **looks** and
+  tells you which.
+- New behavior is a sentence (*"watch the backyard tonight"*), not a blueprint — anyone can direct it.
+- Rename a device and a rule breaks silently. Cooper works off what's actually there.
+- *"Is everything okay at home?"* is one question, not a web of rules.
+
+It doesn't replace automations — fast local rules handle the reflexes (porch light at sunset);
+Cooper is the **judgment layer** on top.
+
+> Automations are a vending machine. Cooper is a concierge.
+
 ## Architecture at a glance
 
 ```mermaid
