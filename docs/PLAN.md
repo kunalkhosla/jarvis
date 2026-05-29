@@ -34,7 +34,7 @@ So before anything else:
    Needs a dedicated search-API key.
 3. Tune Claude's system prompt: house context, personality, the curated live-entity surface.
 4. Curate intents/scripts for common commands (the fast path).
-5. *(optional, later)* voice satellite + "Jarvis" wake word for hands-free.
+5. *(optional, later)* voice satellite + "Cooper" wake word for hands-free.
 
 ## Track B — Guardian agent (containerized; HA add-on now → standalone on home server later)
 
@@ -54,7 +54,7 @@ image** moves to a standalone container on the home server later.
 ## Then
 
 - Run Track B on the **LAN-local home server** for production reliability.
-- Retire the off-the-shelf assistant room by room as Jarvis earns trust.
+- Retire the off-the-shelf assistant room by room as Cooper earns trust.
 
 ## Verification (per slice)
 

@@ -1,4 +1,4 @@
-# Jarvis
+# Cooper
 
 A **Claude-powered home agent** built on the Home Assistant MCP — an alternative to off-the-shelf
 voice assistants that's both *faster* on common commands and *genuinely intelligent* on the hard
@@ -15,7 +15,7 @@ persists over time.
 ```mermaid
 flowchart TB
     subgraph user[" "]
-      V["🎙 Voice — wake word 'Jarvis'"]
+      V["🎙 Voice — wake word 'Cooper'"]
       C["💬 Chat / HA app"]
     end
 

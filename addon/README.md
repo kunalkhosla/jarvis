@@ -1,4 +1,4 @@
-# Jarvis Guardian (HA add-on)
+# Cooper Guardian (HA add-on)
 
 The goal-driven guardian agent (Layer 2) as a Home Assistant add-on — an isolated Docker
 container that runs on the HA box (LAN-local, survives WAN outages). The **same image** runs as a

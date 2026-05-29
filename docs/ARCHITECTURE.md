@@ -16,7 +16,7 @@ fast-path + smart-path is the whole trick.
 ### Layer 1 — Voice/chat front-end
 HA's **Assist** pipeline (wake word → STT → conversation agent → TTS) with the conversation agent
 set to **prefer local intents, fall back to Claude** (HA *Anthropic Conversation* integration).
-HA-config only — no service to host. Voice satellites (HA Voice PE / ESPHome, "Jarvis" wake word)
+HA-config only — no service to host. Voice satellites (HA Voice PE / ESPHome, "Cooper" wake word)
 are an optional later add; text/app works day one. On Android, HA Assist can be set as the
 device's default assistant (replacing the stock one).
 

@@ -1,4 +1,4 @@
-# Builds the Jarvis Guardian. Runs both as an HA add-on and as a standalone container.
+# Builds the Cooper Guardian. Runs both as an HA add-on and as a standalone container.
 FROM node:20-alpine
 WORKDIR /app
 COPY package.json tsconfig.json ./

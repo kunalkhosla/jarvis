@@ -3,9 +3,9 @@ import type { Config } from "./config.js";
 import type { HaClient } from "./ha.js";
 import { tierFor } from "./guardrails.js";
 
-const L = (m: string) => console.log(`[jarvis ${new Date().toISOString()}] ${m}`);
+const L = (m: string) => console.log(`[cooper ${new Date().toISOString()}] ${m}`);
 
-const SYSTEM = `You are Jarvis, a home agent for a Home Assistant smart home.
+const SYSTEM = `You are Cooper, a home agent for a Home Assistant smart home.
 You are given a GOAL and live home state. Reason about what (if anything) to do RIGHT NOW.
 - Use get_live_context to read state before acting or answering.
 - Act via call_service. Reversible actions (lights/fans/media/climate) run automatically;
@@ -86,7 +86,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string): Promise<
       else if (t.name === "web_search") { L(`    🌐 web_search: ${a.query}`); out = await webSearch(cfg, a.query); }
       else if (t.name === "notify") {
         if (cfg.observeMode) { out = "[observe] would notify: " + a.message; }
-        else { for (const tgt of cfg.notifyTargets) await ha.notify(tgt, "Jarvis", a.message); out = "notified"; }
+        else { for (const tgt of cfg.notifyTargets) await ha.notify(tgt, "Cooper", a.message); out = "notified"; }
         L(`    📲 notify -> ${out}`); log.push(out);
       } else if (t.name === "call_service") {
         const tier = tierFor(a.domain, a.service);
