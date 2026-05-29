@@ -65,17 +65,18 @@ const TOOLS: Anthropic.Tool[] = [
 // Anthropic's native web-search server tool — runs server-side, no separate search key needed.
 const WEB_SEARCH = { type: "web_search_20250305", name: "web_search", max_uses: 5 };
 
-/** Resolve a camera name/entity to a real camera entity_id; prefer the working "_clear" substream. */
-function resolveCamera(raw: string, known: Set<string>): string | null {
+/** Resolve a camera name/entity to an ORDERED list of candidate entity_ids (best first), so callers
+ *  can try them until one actually yields a snapshot. Maps "_fluent" → the working "_clear"
+ *  substream, de-ranks known-unavailable cams, and de-dupes. Robust to cams that report a healthy
+ *  state but whose snapshot 500s (e.g. a dead Wyze) — the caller just falls through to the next. */
+function resolveCameras(raw: string, known: Set<string>, bad: Set<string> = new Set()): string[] {
+  const swap = (id: string) => (id.endsWith("_fluent") && known.has(id.replace(/_fluent$/, "_clear")) ? id.replace(/_fluent$/, "_clear") : id);
   const direct = raw.startsWith("camera.") ? raw : `camera.${raw}`;
-  const pick = (id: string) => {
-    if (id.endsWith("_fluent") && known.has(id.replace(/_fluent$/, "_clear"))) return id.replace(/_fluent$/, "_clear");
-    return id;
-  };
-  if (known.has(direct)) return pick(direct);
-  const tok = raw.toLowerCase().replace(/[^a-z0-9]+/g, "_");
-  const hit = [...known].find((k) => k.startsWith("camera.") && k.includes(tok));
-  return hit ? pick(hit) : null;
+  const matches = known.has(direct)
+    ? [direct]
+    : [...known].filter((k) => k.startsWith("camera.") && k.includes(raw.toLowerCase().replace(/[^a-z0-9]+/g, "_")));
+  const rank = (k: string) => (bad.has(k) ? 2 : 0) + (k.endsWith("_fluent") ? 1 : 0); // working+clear first
+  return [...new Set(matches.sort((a, b) => rank(a) - rank(b)).map(swap))];
 }
 
 export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget): Promise<string> {
@@ -106,7 +107,9 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     });
     budget?.recordCall(Date.now(), res.usage);
     messages.push({ role: "assistant", content: res.content });
-    for (const c of res.content) if (c.type === "text" && c.text.trim()) L(`  ${C.think}💭 ${c.text.trim().slice(0, 240)}${C.reset}`);
+    // Skip logging the narration on a finish turn — the green "✔ finish" line already says it.
+    const finishing = res.content.some((c) => c.type === "tool_use" && c.name === "finish");
+    if (!finishing) for (const c of res.content) if (c.type === "text" && c.text.trim()) L(`  ${C.think}💭 ${c.text.trim().slice(0, 240)}${C.reset}`);
     if (res.content.some((c) => (c as any).type === "server_tool_use")) L(`    ${C.cyan}🌐 web_search (native)${C.reset}`);
     const toolUses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === "tool_use");
     L(`  ${C.gray}step ${step}: ${toolUses.length} tool call(s) [stop_reason=${res.stop_reason}]${C.reset}`);
@@ -132,14 +135,17 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
       }
       else if (t.name === "look_at_camera") {
         const names: string[] = [a.cameras].flat().filter(Boolean);
-        await ensureIds();
+        const states = await ha.getStates();
+        knownIds ??= new Set(states.map((s) => s.entity_id));
+        const badCams = new Set(states.filter((s) => s.entity_id.startsWith("camera.") && ["unavailable", "unknown"].includes(s.state)).map((s) => s.entity_id));
         const blocks: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> = [];
         for (const raw of names.slice(0, 4)) {
-          const ent = resolveCamera(raw, knownIds!);
-          if (!ent) { blocks.push({ type: "text", text: `no such camera: ${raw}` }); continue; }
-          const snap = await ha.cameraSnapshot(ent);
-          if (!snap) { blocks.push({ type: "text", text: `${ent}: snapshot unavailable` }); continue; }
-          blocks.push({ type: "text", text: `Camera ${ent}:` });
+          const cands = resolveCameras(raw, knownIds!, badCams);
+          if (!cands.length) { blocks.push({ type: "text", text: `no such camera: ${raw}` }); continue; }
+          let snap = null, used = "";
+          for (const ent of cands) { snap = await ha.cameraSnapshot(ent); if (snap) { used = ent; break; } } // try until one works
+          if (!snap) { blocks.push({ type: "text", text: `${raw}: no working camera (tried ${cands.join(", ")})` }); continue; }
+          blocks.push({ type: "text", text: `Camera ${used}:` });
           blocks.push({ type: "image", source: { type: "base64", media_type: snap.mediaType, data: snap.base64 } });
         }
         const nImg = blocks.filter((b) => b.type === "image").length;
@@ -157,7 +163,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         // Notify is how Cooper TALKS to you — it always fires, even in observe mode (which only
         // suppresses device actions). Optionally attach the live camera photo.
         const data: Record<string, unknown> = {};
-        if (a.camera) { await ensureIds(); const ent = resolveCamera(a.camera, knownIds!); if (ent) data.image = `/api/camera_proxy/${ent}`; }
+        if (a.camera) { await ensureIds(); const ent = resolveCameras(a.camera, knownIds!)[0]; if (ent) data.image = `/api/camera_proxy/${ent}`; }
         const pr = String(a.priority ?? "normal").toLowerCase();
         if (pr === "high") Object.assign(data, { importance: "high", priority: "high", ttl: 0 });
         else if (pr === "critical" || pr === "emergency") // bypass silent/DND, sound the alarm channel

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.6
+- Camera lookup now tries candidate cameras until one actually returns an image — so a name like
+  "driveway" no longer fails on a dead cam that reports a healthy state; it falls through to a
+  working stream.
+- Logs no longer repeat the answer as a 💭 reasoning line right before the ✔ finish line.
+
 ## 0.11.5
 - Weather now comes from HA's own forecast for your exact location, via a new get_forecast tool
   (discovers the weather entity by domain — no hardcoded names). Replaces web-searching weather,
