@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Config } from "./config.js";
 import type { HaClient } from "./ha.js";
 import { tierFor } from "./guardrails.js";
+import type { Budget } from "./budget.js";
 
 const L = (m: string) => console.log(`[cooper ${new Date().toISOString()}] ${m}`);
 
@@ -12,6 +13,10 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
   risky ones (locks, alarm, valve, garage/awning close, sirens) require user confirmation —
   call_service will tell you when an action was deferred for confirmation. Never invent entities.
 - Only act when the goal warrants it; for watch-goals, often the right answer is "nothing to do".
+- CAMERAS: the detection sensors (binary_sensor *_person / *_motion / *_occupancy) only tell you
+  SOMETHING happened. To know WHAT, use look_at_camera to actually see the scene, then describe
+  who/what is there before deciding or alerting. Prefer the camera nearest the triggered sensor.
+  PRIVACY: only look at indoor cameras when the goal explicitly calls for it; default to outdoor.
 - You have built-in web search for live external facts. Use notify to alert the user. Call finish when done.
 - REPORT FAITHFULLY from tool results: if call_service returns "[observe]" the action was NOT
   performed (observe mode) — say you *would* do it, never claim you did. If it returns "DEFERRED",
@@ -23,6 +28,8 @@ const TOOLS: Anthropic.Tool[] = [
   { name: "call_service", description: "Call an HA service. Reversible runs automatically; risky is deferred for confirmation.",
     input_schema: { type: "object", required: ["domain", "service", "reason"],
       properties: { domain: { type: "string" }, service: { type: "string" }, data: { type: "object" }, reason: { type: "string" } } } },
+  { name: "look_at_camera", description: "See live camera snapshot(s). Pass camera entity_ids or names (e.g. ['driveway','aarlo_kitchen']); returns the current image(s) for you to describe. Max 4 per call.",
+    input_schema: { type: "object", required: ["cameras"], properties: { cameras: { type: "array", items: { type: "string" } } } } },
   { name: "notify", description: "Send a push notification to the user.",
     input_schema: { type: "object", required: ["message"], properties: { message: { type: "string" } } } },
   { name: "finish", description: "End: summarize what you did / decided.",
@@ -32,7 +39,20 @@ const TOOLS: Anthropic.Tool[] = [
 // Anthropic's native web-search server tool — runs server-side, no separate search key needed.
 const WEB_SEARCH = { type: "web_search_20250305", name: "web_search", max_uses: 5 };
 
-export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = ""): Promise<string> {
+/** Resolve a camera name/entity to a real camera entity_id; prefer the working "_clear" substream. */
+function resolveCamera(raw: string, known: Set<string>): string | null {
+  const direct = raw.startsWith("camera.") ? raw : `camera.${raw}`;
+  const pick = (id: string) => {
+    if (id.endsWith("_fluent") && known.has(id.replace(/_fluent$/, "_clear"))) return id.replace(/_fluent$/, "_clear");
+    return id;
+  };
+  if (known.has(direct)) return pick(direct);
+  const tok = raw.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  const hit = [...known].find((k) => k.startsWith("camera.") && k.includes(tok));
+  return hit ? pick(hit) : null;
+}
+
+export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget): Promise<string> {
   const anthropic = new Anthropic({ apiKey: cfg.anthropicKey });
   const log: string[] = [];
   const messages: Anthropic.MessageParam[] = [
@@ -50,6 +70,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
       model: cfg.model, max_tokens: 1024, system: SYSTEM,
       tools: [...TOOLS, WEB_SEARCH] as Anthropic.MessageCreateParams["tools"], messages,
     });
+    budget?.recordCall(Date.now(), res.usage);
     messages.push({ role: "assistant", content: res.content });
     for (const c of res.content) if (c.type === "text" && c.text.trim()) L(`  think: ${c.text.trim().slice(0, 240)}`);
     if (res.content.some((c) => (c as any).type === "server_tool_use")) L(`    🌐 web_search (native)`);
@@ -74,6 +95,24 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         });
         out = JSON.stringify(compact).slice(0, 30000);
         L(`    🔍 get_live_context(${(a.domains ?? ["all"]).join(",")}) -> ${compact.length} entities`);
+      }
+      else if (t.name === "look_at_camera") {
+        const names: string[] = [a.cameras].flat().filter(Boolean);
+        await ensureIds();
+        const blocks: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> = [];
+        for (const raw of names.slice(0, 4)) {
+          const ent = resolveCamera(raw, knownIds!);
+          if (!ent) { blocks.push({ type: "text", text: `no such camera: ${raw}` }); continue; }
+          const snap = await ha.cameraSnapshot(ent);
+          if (!snap) { blocks.push({ type: "text", text: `${ent}: snapshot unavailable` }); continue; }
+          blocks.push({ type: "text", text: `Camera ${ent}:` });
+          blocks.push({ type: "image", source: { type: "base64", media_type: snap.mediaType, data: snap.base64 } });
+        }
+        const nImg = blocks.filter((b) => b.type === "image").length;
+        budget?.recordImages(nImg);
+        L(`    📷 look_at_camera(${names.join(",")}) -> ${nImg} image(s)`); log.push(`looked at ${nImg} camera(s)`);
+        results.push({ type: "tool_result", tool_use_id: t.id, content: blocks.length ? blocks : [{ type: "text", text: "no images" }] });
+        continue;
       }
       else if (t.name === "notify") {
         if (cfg.observeMode) { out = "[observe] would notify: " + a.message; }

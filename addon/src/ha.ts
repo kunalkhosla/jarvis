@@ -39,6 +39,21 @@ export class HaClient {
   callService = (domain: string, service: string, data: Record<string, unknown> = {}) =>
     this.rest(`/services/${domain}/${service}`, { method: "POST", body: JSON.stringify(data) });
 
+  /** Fetch a still JPEG from a camera via HA's camera_proxy, as base64 for Claude vision.
+   *  Reolink full-res "*_fluent" streams 500 on snapshot — fall back to the "*_clear" substream. */
+  async cameraSnapshot(entityId: string): Promise<{ base64: string; mediaType: "image/jpeg" } | null> {
+    const grab = async (id: string): Promise<string | null> => {
+      const r = await fetch(`${this.cfg.haBaseUrl}/camera_proxy/${id}`, {
+        headers: { Authorization: `Bearer ${this.cfg.haToken}` },
+      });
+      if (!r.ok) return null;
+      return Buffer.from(await r.arrayBuffer()).toString("base64");
+    };
+    let b = await grab(entityId);
+    if (!b && entityId.endsWith("_fluent")) b = await grab(entityId.replace(/_fluent$/, "_clear"));
+    return b ? { base64: b, mediaType: "image/jpeg" } : null;
+  }
+
   notify = (target: string, title: string, message: string) =>
     this.callService("notify", target.replace(/^notify\./, ""), { title, message });
 

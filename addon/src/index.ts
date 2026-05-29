@@ -3,9 +3,11 @@ import { loadConfig } from "./config.js";
 import { HaClient, EntityState } from "./ha.js";
 import { runGoal } from "./agent.js";
 import { Store, Goal } from "./store.js";
+import { Budget } from "./budget.js";
 
 const cfg = loadConfig();
 const ha = new HaClient(cfg);
+const budget = new Budget(cfg.maxLlmCallsPerHour, cfg.maxLlmCallsPerDay);
 const log = (m: string) => console.log(`[cooper ${new Date().toISOString()}] ${m}`);
 
 // Durable store (SQLite). Watch-goals persist across restarts; do-goals are one-shot/in-memory.
@@ -21,7 +23,7 @@ log(`starting — model=${cfg.model}, observe=${cfg.observeMode}, search=${cfg.s
 createServer(async (req, res) => {
   const json = (code: number, body: unknown) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)); };
   if (req.url === "/healthz")
-    return json(200, { ok: true, observe: cfg.observeMode, goals: goals.map((g) => ({ id: g.id, type: g.type, text: g.text })) });
+    return json(200, { ok: true, observe: cfg.observeMode, budget: budget.stats(Date.now()), goals: goals.map((g) => ({ id: g.id, type: g.type, text: g.text })) });
   if (req.method === "POST" && req.url === "/goal") {
     let raw = ""; for await (const c of req) raw += c;
     const { text, type } = JSON.parse(raw || "{}");
@@ -33,7 +35,7 @@ createServer(async (req, res) => {
       : { id: tmpId--, text, type: "do", created: now, lastRun: 0 }; // transient one-shot
     goals.push(g);
     try {
-      const result = await runGoal(cfg, ha, text, isWatch ? "(initial check — establish what's normal)" : "");
+      const result = await runGoal(cfg, ha, text, isWatch ? "(initial check — establish what's normal)" : "", budget);
       g.lastRun = Date.now();
       if (isWatch) store.touchGoal(g.id, g.lastRun);
       else goals.splice(goals.indexOf(g), 1); // do-goals are one-shot, never persisted
@@ -78,7 +80,7 @@ ha.subscribe((entityId, st) => {
     goals.push(g);
     log(`📥 watch-goal from HA conversation: "${text}" (#${g.id})`);
     store.logAction(g.created, g.id, "watch:create", `bridge: ${text}`);
-    runGoal(cfg, ha, text, "(initial check — establish what's normal)")
+    runGoal(cfg, ha, text, "(initial check — establish what's normal)", budget)
       .then((r) => log(`   → ${r}`)).catch((e) => log(`   intake error: ${e}`));
     ha.callService("input_text", "set_value", { entity_id: WATCH_REQUEST, value: "" }).catch(() => {}); // clear for next time
     return;
@@ -94,10 +96,13 @@ async function processBuffer() {
   const events = buffer; buffer = []; timer = null;
   const ctx = `Recent home events:\n${events.join("\n")}`;
   const now = Date.now();
+  const gate = budget.canRun(now);
+  if (!gate.ok) { log(`💸 skip watch eval — ${gate.reason}`); return; } // cost cap: pause auto evals
   for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS)) {
+    if (!budget.canRun(now).ok) break;
     g.lastRun = now; store.touchGoal(g.id, now);
     log(`👁 watch eval goal #${g.id} (${events.length} events)`);
-    try { const r = await runGoal(cfg, ha, g.text, ctx); store.logAction(now, g.id, "watch:eval", String(r).slice(0, 500)); log(`   → ${r}`); }
+    try { const r = await runGoal(cfg, ha, g.text, ctx, budget); store.logAction(now, g.id, "watch:eval", String(r).slice(0, 500)); log(`   → ${r}`); }
     catch (e) { log(`   watch goal #${g.id} error: ${e}`); }
   }
 }
@@ -106,8 +111,9 @@ async function processBuffer() {
 setInterval(async () => {
   const now = Date.now();
   for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS)) {
+    if (!budget.canRun(now).ok) { log(`💸 skip heartbeat — ${budget.canRun(now).reason}`); break; }
     g.lastRun = now; store.touchGoal(g.id, now);
-    try { const r = await runGoal(cfg, ha, g.text, "(periodic check — no specific event)"); store.logAction(now, g.id, "watch:heartbeat", String(r).slice(0, 500)); log(`⏱ heartbeat goal #${g.id}: ${r}`); }
+    try { const r = await runGoal(cfg, ha, g.text, "(periodic check — no specific event)", budget); store.logAction(now, g.id, "watch:heartbeat", String(r).slice(0, 500)); log(`⏱ heartbeat goal #${g.id}: ${r}`); }
     catch (e) { log(`heartbeat goal #${g.id} error: ${e}`); }
   }
 }, Math.max(60, cfg.heartbeatSeconds) * 1000);
