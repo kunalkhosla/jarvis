@@ -29,6 +29,9 @@ calendars, weather, presence, media players, a water shutoff valve).
   schedule).
 - **"Wind down for bed"** — lights, locks, climate setback, arm.
 - **Vacation mode** — adaptive, goal-driven rather than a brittle scene.
+- **"Prepare the home for my arrival" / "in an hour, warm up the house"** — a *deferred* task that
+  fires on a scheduled time **or when you actually arrive** (proximity/arrival), not a blind timer
+  that's wrong when traffic changes; comfortable climate + entry lights if it's dark, reversible only.
 
 ## Conversational / informational
 - "Is everything okay at home?" (status synthesis)

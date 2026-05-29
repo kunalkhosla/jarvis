@@ -144,6 +144,7 @@ The same image also runs as a plain Docker container for local development (set 
 |---|---|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design, the goal-loop, deployment topology, diagrams |
 | [USE-CASES.md](docs/USE-CASES.md) | The full catalog of what it can do |
+| [MIGRATING-FROM-AUTOMATIONS.md](docs/MIGRATING-FROM-AUTOMATIONS.md) | What to keep as automations, what to move to Cooper, and the hybrid pattern |
 | [GUARDRAILS.md](docs/GUARDRAILS.md) | Autonomy model — act on safe / confirm risky / never |
 | [PLAN.md](docs/PLAN.md) | Phased build roadmap |
 
