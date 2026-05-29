@@ -52,10 +52,12 @@ const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } } },
 ];
 
-export async function runGoal(cfg: Config, ha: HaClient, goal: string): Promise<string> {
+export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = ""): Promise<string> {
   const anthropic = new Anthropic({ apiKey: cfg.anthropicKey });
   const log: string[] = [];
-  const messages: Anthropic.MessageParam[] = [{ role: "user", content: `GOAL: ${goal}` }];
+  const messages: Anthropic.MessageParam[] = [
+    { role: "user", content: `GOAL: ${goal}${extraContext ? `\n\n${extraContext}` : ""}` },
+  ];
 
   L(`▶ goal: ${goal}  (observe=${cfg.observeMode}, model=${cfg.model})`);
   for (let step = 0; step < 12; step++) {
