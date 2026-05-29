@@ -134,6 +134,15 @@ const notifyAll = (msg: string) => { for (const tgt of cfg.notifyTargets) ha.not
 
 // ---- Kill-switch + interactive Yes/No confirmation (the guardrail "hooks" the agent calls) ----
 let paused = false; // mirrors PAUSE_SWITCH; updated from state_changed + read at boot
+// Pending scheduled-action timers (from schedule_actions) so a "stop the sequence" can cancel them.
+const scheduledTimers: { t: ReturnType<typeof setTimeout>; label: string }[] = [];
+function cancelScheduled(match?: string): number {
+  const m = match?.toLowerCase().trim();
+  const victims = scheduledTimers.filter((s) => !m || s.label.toLowerCase().includes(m));
+  for (const s of victims) { clearTimeout(s.t); const i = scheduledTimers.indexOf(s); if (i >= 0) scheduledTimers.splice(i, 1); }
+  if (victims.length) log(`${C.yellow}🛑 cancelled ${victims.length} pending scheduled action(s)${C.reset}`);
+  return victims.length;
+}
 const pendingConfirm = new Map<string, { domain: string; service: string; data: Record<string, unknown> }>();
 let confirmSeq = 1;
 const MAX_PENDING_CONFIRMS = 3; // never fan out more than this many Yes/No prompts at once (anti-spam)
@@ -179,9 +188,15 @@ ha.onEvent("mobile_app_notification_action", async (d) => {
 const hooks: Hooks = {
   paused: () => paused,
   requestConfirm,
+  trackTimer: (t, label) => { scheduledTimers.push({ t, label }); },
+  untrackTimer: (t) => { const i = scheduledTimers.findIndex((s) => s.t === t); if (i >= 0) scheduledTimers.splice(i, 1); },
   cancelWatches: (match?: string) => {
     const { n, texts } = removeWatches(Date.now(), match);
-    return n ? `stood down ${n} watch(es): ${texts.join("; ")}` : "no active watches matched";
+    const s = cancelScheduled(match);
+    const parts: string[] = [];
+    if (n) parts.push(`${n} watch(es): ${texts.join("; ")}`);
+    if (s) parts.push(`${s} pending scheduled action(s)`);
+    return parts.length ? `stood down ${parts.join(" and ")}` : "nothing matched — no active watches or scheduled actions";
   },
 };
 
@@ -221,9 +236,10 @@ ha.subscribe((entityId, st) => {
     // Stop/stand-down — deterministic, no LLM. Must win over WATCH_INTENT ("watch" is in both).
     if (STOP_INTENT.test(text)) {
       const { n } = removeWatches(tnow);
-      header(`🛑 stop-watch from phone: "${text}" → cancelled ${n} watch(es)`);
+      const s = cancelScheduled();
+      header(`🛑 stop from phone: "${text}" → cancelled ${n} watch(es), ${s} scheduled action(s)`);
       store.logAction(tnow, null, "bridge:stop", text);
-      notifyAll(n ? `Stopped ${n} watch${n > 1 ? "es" : ""}.` : "No active watches to stop.");
+      notifyAll(n || s ? `Stopped ${n} watch${n !== 1 ? "es" : ""} and ${s} scheduled action${s !== 1 ? "s" : ""}.` : "Nothing active to stop.");
       return;
     }
     const isWatch = wantsStandingWhileAway(text) || wantsPresenceStandDown(text) || WATCH_INTENT.test(text);

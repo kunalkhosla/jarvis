@@ -25,9 +25,12 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
   SINGLE call_service with entity_id as a LIST — that's one Yes/No for the whole set, not one prompt
   per entity. Never fire a separate confirmation for each entity.
 - Only act when the goal warrants it; for watch-goals, often the right answer is "nothing to do".
-- STOP WATCHING: to stop watching / remove or cancel a watch / stand down, you MUST call cancel_watch
-  (omit "match" to clear ALL watches, or pass a phrase to target specific ones). Saying you stopped is
-  NOT enough — the watch keeps re-checking until cancel_watch actually removes it.
+- STOP / STAND DOWN: to stop watching, cancel a watch, OR stop a running scheduled sequence (e.g. a
+  multi-zone sprinkler run still in progress with more zones queued), you MUST call cancel_watch (omit
+  "match" for everything, or pass a phrase to target some). Saying you stopped is NOT enough — watches
+  keep re-checking and scheduled steps keep firing until cancel_watch actually cancels them. To also
+  turn off things already running right now, call the matching off/stop service too (e.g. stop_watering
+  / switch.turn_off).
 - CAMERAS: the detection sensors (binary_sensor *_person / *_motion / *_occupancy) only tell you
   SOMETHING happened. To know WHAT, use look_at_camera to actually see the scene, then describe
   who/what is there before deciding or alerting. Prefer the camera nearest the triggered sensor.
@@ -76,7 +79,7 @@ const TOOLS: Anthropic.Tool[] = [
       properties: { after_seconds: { type: "number" }, domain: { type: "string" }, service: { type: "string" }, data: { type: "object" }, note: { type: "string" } } } } } } },
   { name: "notify", description: "Send a push notification. 'camera' (entity_id/name) attaches a live photo. 'priority' sets urgency by YOUR judgment of severity: normal=routine FYI, high=wants attention now (visitor/package), critical=genuine safety only (intruder/smoke/flood) — critical bypasses silent & Do-Not-Disturb and sounds the alarm channel.",
     input_schema: { type: "object", required: ["message"], properties: { message: { type: "string" }, camera: { type: "string" }, priority: { type: "string", enum: ["normal", "high", "critical"] } } } },
-  { name: "cancel_watch", description: "Stand down / cancel active watch-goals so they stop running and stop re-checking. Omit 'match' to cancel ALL watches; pass a phrase to cancel only watches whose text matches it. Call this whenever the user asks to stop watching, remove/cancel a watch, or stand down.",
+  { name: "cancel_watch", description: "Stand down active watch-goals AND stop pending scheduled/timed sequences (e.g. a multi-zone sprinkler run still mid-sequence) so they stop running, re-checking, and firing future steps. Omit 'match' to cancel EVERYTHING; pass a phrase to target a subset. Call this whenever the user asks to stop watching, stop/cancel a running sequence, remove a watch, or stand down.",
     input_schema: { type: "object", properties: { match: { type: "string" } } } },
   { name: "finish", description: "End: summarize what you did / decided.",
     input_schema: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } } },
@@ -103,8 +106,11 @@ function resolveCameras(raw: string, known: Set<string>, bad: Set<string> = new 
 export interface Hooks {
   paused?: () => boolean;
   requestConfirm?: (domain: string, service: string, data: Record<string, unknown>, reason: string) => string;
-  /** Stand down / cancel watch-goals. Omit match to cancel ALL; pass a phrase to target a subset. */
+  /** Stand down watch-goals AND stop pending scheduled actions. Omit match for all; pass a phrase to target a subset. */
   cancelWatches?: (match?: string) => string;
+  /** Register/forget a pending scheduled-action timer so a "stop the sequence" can clearTimeout it. */
+  trackTimer?: (t: ReturnType<typeof setTimeout>, label: string) => void;
+  untrackTimer?: (t: ReturnType<typeof setTimeout>) => void;
 }
 
 export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget, hooks?: Hooks): Promise<string> {
@@ -221,12 +227,15 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
           const missing = ids.filter((id) => !knownIds!.has(id));
           if (missing.length) { planned.push(`✗ no such entity: ${missing.join(",")}`); continue; }
           if (tier !== "auto") { planned.push(`✗ ${s.domain}.${s.service} needs confirmation — not scheduling`); continue; }
-          // Fire later from the running process (deterministic, no LLM at fire time).
-          setTimeout(() => {
+          // Fire later from the running process (deterministic, no LLM at fire time). Registered with
+          // the host so a "stop the sequence" / cancel_watch can clearTimeout the still-pending steps.
+          const handle = setTimeout(() => {
+            hooks?.untrackTimer?.(handle);
             if (hooks?.paused?.()) { L(`    ${C.yellow}⏲ paused — skipped ${s.domain}.${s.service}${C.reset}`); return; }
             ha.callService(s.domain, s.service, s.data ?? {}).catch(() => {});
             L(`    ${C.green}⏲ fired: ${s.domain}.${s.service} ${JSON.stringify(s.data ?? {})} ${s.note ? `(${s.note})` : ""}${C.reset}`);
           }, delay * 1000);
+          hooks?.trackTimer?.(handle, `${s.domain}.${s.service}${s.note ? ` (${s.note})` : ""}`);
           planned.push(`+${delay}s ${s.domain}.${s.service} ${s.note ?? ""}`);
         }
         out = planned.length ? `scheduled ${planned.filter((p) => !p.startsWith("✗")).length}/${steps.length}:\n${planned.join("\n")}` : "no steps";

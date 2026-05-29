@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.0
+- **Running sequences can actually be stopped now.** `schedule_actions` timers are registered with the
+  host, so `cancel_watch` (and the voice "stop watching / stand down") now also `clearTimeout`s the
+  still-pending steps — previously a mid-run multi-zone sprinkler sequence kept firing future zones even
+  after you said "stop," because the sequence is scheduled timers, not a watch. `cancel_watch` now
+  covers watches **and** scheduled sequences, and reports the real counts (no more false "stopped").
+
 ## 0.17.2
 - **Sprinkler durations are honored now.** A zone's `switch.turn_on` runs the zone's app-configured
   default time and ignores the minutes you ask for (so "15 min" came out as the zone default). Watering
