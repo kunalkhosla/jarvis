@@ -2,18 +2,20 @@ import { createServer } from "node:http";
 import { loadConfig } from "./config.js";
 import { HaClient, EntityState } from "./ha.js";
 import { runGoal } from "./agent.js";
+import { Store, Goal } from "./store.js";
 
 const cfg = loadConfig();
 const ha = new HaClient(cfg);
 const log = (m: string) => console.log(`[cooper ${new Date().toISOString()}] ${m}`);
 
-// Goal store (in-memory for v0.2 — TODO: persist to SQLite: goals, baselines, action log).
-interface Goal { id: number; text: string; type: "watch" | "do"; created: number; lastRun: number; }
-const goals: Goal[] = [];
-let nextId = 1;
+// Durable store (SQLite). Watch-goals persist across restarts; do-goals are one-shot/in-memory.
+// `goals` is the hot-path in-memory cache, write-through to the store on every mutation.
+const store = new Store();
+const goals: Goal[] = store.watchGoals();
+let tmpId = -1; // transient ids for one-shot do-goals (never collide with SQLite rowids)
 const COOLDOWN_MS = 120_000; // min gap between evaluations of the same watch-goal
 
-log(`starting — model=${cfg.model}, observe=${cfg.observeMode}, search=${cfg.searchProvider}`);
+log(`starting — model=${cfg.model}, observe=${cfg.observeMode}, search=${cfg.searchProvider}; ${goals.length} watch-goal(s) restored`);
 
 // ---- HTTP control surface: /healthz, POST /goal {text,type}, DELETE /goal/:id ----
 createServer(async (req, res) => {
@@ -24,18 +26,29 @@ createServer(async (req, res) => {
     let raw = ""; for await (const c of req) raw += c;
     const { text, type } = JSON.parse(raw || "{}");
     if (!text) return json(400, { error: "text required" });
-    const g: Goal = { id: nextId++, text, type: type === "watch" ? "watch" : "do", created: Date.now(), lastRun: 0 };
+    const isWatch = type === "watch";
+    const now = Date.now();
+    const g: Goal = isWatch
+      ? store.addGoal(text, now, 0) // persisted (gets a real rowid)
+      : { id: tmpId--, text, type: "do", created: now, lastRun: 0 }; // transient one-shot
     goals.push(g);
     try {
-      const result = await runGoal(cfg, ha, text, g.type === "watch" ? "(initial check — establish what's normal)" : "");
+      const result = await runGoal(cfg, ha, text, isWatch ? "(initial check — establish what's normal)" : "");
       g.lastRun = Date.now();
-      if (g.type === "do") goals.splice(goals.indexOf(g), 1); // do-goals are one-shot
+      if (isWatch) store.touchGoal(g.id, g.lastRun);
+      else goals.splice(goals.indexOf(g), 1); // do-goals are one-shot, never persisted
+      store.logAction(now, g.id, isWatch ? "watch:create" : "do:run", String(result).slice(0, 500));
       return json(200, { id: g.id, type: g.type, result });
-    } catch (e) { return json(500, { error: String(e) }); }
+    } catch (e) {
+      if (isWatch) { store.deleteGoal(g.id); goals.splice(goals.indexOf(g), 1); } // roll back failed watch
+      return json(500, { error: String(e) });
+    }
   }
   if (req.method === "DELETE" && req.url?.startsWith("/goal/")) {
     const id = Number(req.url.split("/")[2]); const i = goals.findIndex((g) => g.id === id);
-    return i >= 0 ? (goals.splice(i, 1), json(200, { deleted: id })) : json(404, { error: "no such goal" });
+    if (i < 0) return json(404, { error: "no such goal" });
+    goals.splice(i, 1); store.deleteGoal(id);
+    return json(200, { deleted: id });
   }
   json(404, { error: "not found" });
 }).listen(8099, () => log("http on :8099"));
@@ -61,9 +74,10 @@ ha.subscribe((entityId, st) => {
   // Bridge: phone/voice Cooper writes a watch request into this helper → register a watch-goal.
   if (entityId === WATCH_REQUEST && st.state && st.state.trim()) {
     const text = st.state.trim();
-    const g: Goal = { id: nextId++, text, type: "watch", created: Date.now(), lastRun: Date.now() };
+    const g = store.addGoal(text, Date.now(), Date.now()); // persisted watch-goal
     goals.push(g);
     log(`📥 watch-goal from HA conversation: "${text}" (#${g.id})`);
+    store.logAction(g.created, g.id, "watch:create", `bridge: ${text}`);
     runGoal(cfg, ha, text, "(initial check — establish what's normal)")
       .then((r) => log(`   → ${r}`)).catch((e) => log(`   intake error: ${e}`));
     ha.callService("input_text", "set_value", { entity_id: WATCH_REQUEST, value: "" }).catch(() => {}); // clear for next time
@@ -81,9 +95,9 @@ async function processBuffer() {
   const ctx = `Recent home events:\n${events.join("\n")}`;
   const now = Date.now();
   for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS)) {
-    g.lastRun = now;
+    g.lastRun = now; store.touchGoal(g.id, now);
     log(`👁 watch eval goal #${g.id} (${events.length} events)`);
-    try { log(`   → ${await runGoal(cfg, ha, g.text, ctx)}`); }
+    try { const r = await runGoal(cfg, ha, g.text, ctx); store.logAction(now, g.id, "watch:eval", String(r).slice(0, 500)); log(`   → ${r}`); }
     catch (e) { log(`   watch goal #${g.id} error: ${e}`); }
   }
 }
@@ -92,8 +106,8 @@ async function processBuffer() {
 setInterval(async () => {
   const now = Date.now();
   for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS)) {
-    g.lastRun = now;
-    try { log(`⏱ heartbeat goal #${g.id}: ${await runGoal(cfg, ha, g.text, "(periodic check — no specific event)")}`); }
+    g.lastRun = now; store.touchGoal(g.id, now);
+    try { const r = await runGoal(cfg, ha, g.text, "(periodic check — no specific event)"); store.logAction(now, g.id, "watch:heartbeat", String(r).slice(0, 500)); log(`⏱ heartbeat goal #${g.id}: ${r}`); }
     catch (e) { log(`heartbeat goal #${g.id} error: ${e}`); }
   }
 }, Math.max(60, cfg.heartbeatSeconds) * 1000);

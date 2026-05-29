@@ -1,0 +1,72 @@
+import Database from "better-sqlite3";
+import { mkdirSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
+
+export interface Goal {
+  id: number;
+  text: string;
+  type: "watch" | "do";
+  created: number;
+  lastRun: number;
+}
+
+/** Where the DB lives. As an HA add-on, /data is the persisted volume; standalone falls back
+ *  to the working dir. Override with COOPER_DB. */
+function dbPath(): string {
+  if (process.env.COOPER_DB) return process.env.COOPER_DB;
+  return existsSync("/data") ? "/data/cooper.sqlite" : "./cooper.sqlite";
+}
+
+/** Durable store for watch-goals + an action/audit log. Survives add-on restarts (the v0.2
+ *  in-memory store wiped every goal on restart). Do-goals are one-shot and are NOT persisted. */
+export class Store {
+  private db: Database.Database;
+
+  constructor(path = dbPath()) {
+    mkdirSync(dirname(path), { recursive: true });
+    this.db = new Database(path);
+    this.db.pragma("journal_mode = WAL");
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS goals (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        text     TEXT NOT NULL,
+        type     TEXT NOT NULL CHECK (type IN ('watch','do')),
+        created  INTEGER NOT NULL,
+        last_run INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS action_log (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts      INTEGER NOT NULL,
+        goal_id INTEGER,
+        kind    TEXT NOT NULL,
+        detail  TEXT
+      );
+    `);
+  }
+
+  /** All persisted (watch) goals, oldest first — loaded into memory at boot. */
+  watchGoals(): Goal[] {
+    return this.db
+      .prepare("SELECT id, text, type, created, last_run AS lastRun FROM goals ORDER BY id")
+      .all() as Goal[];
+  }
+
+  addGoal(text: string, created: number, lastRun: number): Goal {
+    const info = this.db
+      .prepare("INSERT INTO goals (text, type, created, last_run) VALUES (?, 'watch', ?, ?)")
+      .run(text, created, lastRun);
+    return { id: Number(info.lastInsertRowid), text, type: "watch", created, lastRun };
+  }
+
+  touchGoal(id: number, lastRun: number): void {
+    this.db.prepare("UPDATE goals SET last_run = ? WHERE id = ?").run(lastRun, id);
+  }
+
+  deleteGoal(id: number): boolean {
+    return this.db.prepare("DELETE FROM goals WHERE id = ?").run(id).changes > 0;
+  }
+
+  logAction(ts: number, goalId: number | null, kind: string, detail: string): void {
+    this.db.prepare("INSERT INTO action_log (ts, goal_id, kind, detail) VALUES (?, ?, ?, ?)").run(ts, goalId, kind, detail);
+  }
+}
