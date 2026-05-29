@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.0
+- **Interactive confirmation** (cooper#2): risky (confirm-tier) actions now send an actionable
+  Yes/No notification to your phone and run **only if you tap Yes** (5-min expiry) — instead of
+  just deferring and reporting. The approval executes the held action and notifies the result.
+- **Kill-switch**: a self-provisioned `input_boolean.cooper_pause` — turn it on and Cooper halts all
+  device actions (and won't fire queued sequences) while still observing + notifying. Synced live.
+- (Proximity-based arrival prep tracked separately as #3 — needs HA's Proximity integration.)
+
 ## 0.14.0
 - Self-provisions the voice bridge on first run: creates the `input_text` helper + the "Ask Cooper"
   script and exposes it to Assist (idempotent — only what's missing). Setup drops to a single

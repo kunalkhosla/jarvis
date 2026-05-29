@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { loadConfig } from "./config.js";
 import { HaClient, EntityState } from "./ha.js";
-import { runGoal } from "./agent.js";
+import { runGoal, Hooks } from "./agent.js";
 import { Store, Goal, Task } from "./store.js";
 import { Budget } from "./budget.js";
 import { C, L as log, header } from "./log.js";
@@ -72,7 +72,7 @@ createServer(async (req, res) => {
       return json(200, { id: g.id, type: "watch", standing: true, armed: armed.get(g.id) || false });
     }
     try {
-      const result = await runGoal(cfg, ha, text, isWatch ? "(initial check — establish what's normal)" : "", budget);
+      const result = await runGoal(cfg, ha, text, isWatch ? "(initial check — establish what's normal)" : "", budget, hooks);
       g.lastRun = Date.now();
       if (isWatch) store.touchGoal(g.id, g.lastRun);
       else goals.splice(goals.indexOf(g), 1); // do-goals are one-shot, never persisted
@@ -126,7 +126,44 @@ function interesting(entityId: string, st: EntityState): boolean {
 
 const WATCH_REQUEST = "input_text.cooper_watch_request"; // bridge from the HA conversation agent
 const WATCH_INTENT = /\b(watch|keep an eye|monitor|guard|look after|alert me|notify me if|let me know if|keep watch)\b/i;
+const PAUSE_SWITCH = "input_boolean.cooper_pause"; // kill-switch: ON = halt all device actions
 const notifyAll = (msg: string) => { for (const tgt of cfg.notifyTargets) ha.notify(tgt, "Cooper", msg).catch(() => {}); };
+
+// ---- Kill-switch + interactive Yes/No confirmation (the guardrail "hooks" the agent calls) ----
+let paused = false; // mirrors PAUSE_SWITCH; updated from state_changed + read at boot
+const pendingConfirm = new Map<string, { domain: string; service: string; data: Record<string, unknown> }>();
+let confirmSeq = 1;
+
+function requestConfirm(domain: string, service: string, data: Record<string, unknown>, reason: string): string {
+  const id = `c${confirmSeq++}`;
+  pendingConfirm.set(id, { domain, service, data });
+  const human = `${domain}.${service}${data?.entity_id ? ` on ${[data.entity_id].flat().join(", ")}` : ""}`;
+  for (const tgt of cfg.notifyTargets)
+    ha.notify(tgt, "Cooper — confirm?", reason || `Confirm: ${human}?`, {
+      importance: "high", priority: "high", ttl: 0, tag: `cooper-${id}`,
+      actions: [{ action: `COOPER_OK_${id}`, title: "Yes, do it" }, { action: `COOPER_NO_${id}`, title: "No" }],
+    }).catch(() => {});
+  log(`${C.yellow}⚠ confirmation requested #${id}: ${human}${C.reset}`);
+  setTimeout(() => { if (pendingConfirm.delete(id)) log(`${C.gray}confirm #${id} expired (no reply)${C.reset}`); }, 300_000);
+  return `Asked the user to confirm on their phone (Yes/No): ${human}. Say you've requested confirmation — it runs only if they tap Yes.`;
+}
+
+// React to the Yes/No tap from the mobile app.
+ha.onEvent("mobile_app_notification_action", async (d) => {
+  const m = String(d.action || "").match(/^COOPER_(OK|NO)_(c\d+)$/);
+  if (!m) return;
+  const [, verb, id] = m;
+  const p = pendingConfirm.get(id); if (!p) return;
+  pendingConfirm.delete(id);
+  if (verb === "NO") { log(`${C.gray}✗ #${id} denied${C.reset}`); notifyAll(`Okay — skipped ${p.domain}.${p.service}.`); return; }
+  if (paused) { notifyAll(`Can't run that — Cooper is paused.`); return; }
+  log(`${C.green}✓ #${id} approved → ${p.domain}.${p.service}${C.reset}`);
+  store.logAction(Date.now(), null, "confirm:execute", `${p.domain}.${p.service} ${JSON.stringify(p.data)}`);
+  try { await ha.callService(p.domain, p.service, p.data); notifyAll(`Done — ${p.domain}.${p.service}.`); }
+  catch (e) { notifyAll(`Couldn't do ${p.domain}.${p.service}: ${e}`); }
+});
+
+const hooks: Hooks = { paused: () => paused, requestConfirm };
 
 // Self-provision the voice bridge on first run, so setup is one paste (the routing prompt), not a
 // manual helper + script + exposure. Idempotent: only creates what's missing.
@@ -143,12 +180,18 @@ async function provisionBridge() {
     const has = (id: string) => states.some((s) => s.entity_id === id);
     if (!has(WATCH_REQUEST)) { await ha.wsCall({ type: "input_text/create", name: "Cooper Watch Request", max: 255 }); log(`${C.green}✓ created ${WATCH_REQUEST}${C.reset}`); }
     if (!has("script.cooper_watch")) { await ha.postConfig("/config/script/config/cooper_watch", ASK_COOPER_SCRIPT); log(`${C.green}✓ created script.cooper_watch (Ask Cooper)${C.reset}`); }
+    if (!has(PAUSE_SWITCH)) { await ha.wsCall({ type: "input_boolean/create", name: "Cooper Pause" }); log(`${C.green}✓ created ${PAUSE_SWITCH} (kill-switch)${C.reset}`); }
     await ha.wsCall({ type: "homeassistant/expose_entity", assistants: ["conversation"], entity_ids: ["script.cooper_watch"], should_expose: true }).catch(() => {});
+    const sw = (await ha.getStates()).find((s) => s.entity_id === PAUSE_SWITCH); // sync initial kill-switch state
+    paused = sw?.state === "on";
+    if (paused) log(`${C.yellow}⏸ Cooper is PAUSED (kill-switch on) — device actions held${C.reset}`);
   } catch (e) { log(`${C.yellow}bridge provision skipped: ${e}${C.reset}`); }
 }
 provisionBridge();
 
 ha.subscribe((entityId, st) => {
+  // Kill-switch: keep `paused` in sync with the toggle (instant, no LLM).
+  if (entityId === PAUSE_SWITCH) { paused = st.state === "on"; log(`${paused ? C.yellow + "⏸ PAUSED — actions held" : C.green + "▶ resumed — actions allowed"}${C.reset}`); return; }
   // Bridge: the phone/voice assistant forwards ANY request into this helper. Cooper runs it (watch,
   // do, schedule, answer) and notifies the result back — the phone is a thin mic for the guardian.
   if (entityId === WATCH_REQUEST && st.state && st.state.trim()) {
@@ -162,13 +205,13 @@ ha.subscribe((entityId, st) => {
       header(`📥 watch from phone: "${text}" (#${g.id})${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.untilPresent ? " [until home]" : ""}${g.whileAway ? " [standing while-away]" : ""}`);
       store.logAction(g.created, g.id, "watch:create", `bridge: ${text}`);
       if (g.whileAway) { checkPresenceStandDown(tnow).catch(() => {}); notifyAll(`Standing watch set: "${text}". I'll arm whenever everyone's out.`); }
-      else runGoal(cfg, ha, text, "(initial check — establish what's normal)", budget)
+      else runGoal(cfg, ha, text, "(initial check — establish what's normal)", budget, hooks)
         .then((r) => { log(`   ${C.green}→ ${r}${C.reset}`); notifyAll(r); }).catch((e) => log(`   ${C.red}intake error: ${e}${C.reset}`));
     } else {
       // Any non-watch request → run it now (control / schedule / answer) and report the result back.
       header(`📥 request from phone: "${text}"`);
       store.logAction(tnow, null, "bridge:do", text);
-      runGoal(cfg, ha, text, "(handed over from the voice assistant — handle it now; the summary is reported back to the user)", budget)
+      runGoal(cfg, ha, text, "(handed over from the voice assistant — handle it now; the summary is reported back to the user)", budget, hooks)
         .then((r) => { log(`   ${C.green}→ ${r}${C.reset}`); notifyAll(r); }).catch((e) => log(`   ${C.red}bridge error: ${e}${C.reset}`));
     }
     return;
@@ -221,7 +264,7 @@ async function checkPresenceStandDown(now: number) {
         armed.set(g.id, true);
         header(`🛡 ARMED standing watch #${g.id} — everyone's out: "${g.text}"`);
         store.logAction(now, g.id, "watch:armed", g.text);
-        if (budget.canRun(now).ok) runGoal(cfg, ha, g.text, "(now arming — everyone is out; establish what's normal)", budget)
+        if (budget.canRun(now).ok) runGoal(cfg, ha, g.text, "(now arming — everyone is out; establish what's normal)", budget, hooks)
           .then((r) => log(`   ${C.green}→ ${r}${C.reset}`)).catch(() => {});
       } else if (isArmed && allHome) {
         armed.set(g.id, false);
@@ -240,7 +283,7 @@ async function fireTask(tk: Task, now: number, reason: string) {
   const i = tasks.indexOf(tk); if (i >= 0) tasks.splice(i, 1);
   store.deleteTask(tk.id);
   header(`🏠 TASK fire #${tk.id} (${reason}): "${tk.text}"`);
-  try { const r = await runGoal(cfg, ha, tk.text, `(deferred task — ${reason})`, budget); store.logAction(now, null, "task:fire", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
+  try { const r = await runGoal(cfg, ha, tk.text, `(deferred task — ${reason})`, budget, hooks); store.logAction(now, null, "task:fire", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
   catch (e) { log(`   ${C.red}task #${tk.id} error: ${e}${C.reset}`); }
   finally { firing.delete(tk.id); }
 }
@@ -261,7 +304,7 @@ async function processBuffer() {
     if (!budget.canRun(now).ok) break;
     g.lastRun = now; store.touchGoal(g.id, now);
     header(`👁 WATCH eval #${g.id} (${events.length} event(s))`);
-    try { const r = await runGoal(cfg, ha, g.text, ctx, budget); store.logAction(now, g.id, "watch:eval", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
+    try { const r = await runGoal(cfg, ha, g.text, ctx, budget, hooks); store.logAction(now, g.id, "watch:eval", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
     catch (e) { log(`   ${C.red}watch goal #${g.id} error: ${e}${C.reset}`); }
   }
 }
@@ -274,7 +317,7 @@ setInterval(async () => {
     if (!budget.canRun(now).ok) { log(`${C.yellow}💸 skip heartbeat — ${budget.canRun(now).reason}${C.reset}`); break; }
     g.lastRun = now; store.touchGoal(g.id, now);
     header(`⏱ HEARTBEAT eval #${g.id}`);
-    try { const r = await runGoal(cfg, ha, g.text, "(periodic check — no specific event)", budget); store.logAction(now, g.id, "watch:heartbeat", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
+    try { const r = await runGoal(cfg, ha, g.text, "(periodic check — no specific event)", budget, hooks); store.logAction(now, g.id, "watch:heartbeat", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
     catch (e) { log(`   ${C.red}heartbeat goal #${g.id} error: ${e}${C.reset}`); }
   }
 }, Math.max(60, cfg.heartbeatSeconds) * 1000);
@@ -294,6 +337,6 @@ if (cfg.briefingTime) setInterval(async () => {
   lastBriefing = today;
   if (!budget.canRun(Date.now()).ok) { log(`${C.yellow}💸 skip briefing — budget cap${C.reset}`); return; }
   header(`📰 MORNING BRIEFING (${cfg.briefingTime})`);
-  try { const r = await runGoal(cfg, ha, BRIEFING_GOAL, "(scheduled morning briefing)", budget); store.logAction(Date.now(), null, "briefing", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
+  try { const r = await runGoal(cfg, ha, BRIEFING_GOAL, "(scheduled morning briefing)", budget, hooks); store.logAction(Date.now(), null, "briefing", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
   catch (e) { log(`   ${C.red}briefing error: ${e}${C.reset}`); }
 }, 60_000);

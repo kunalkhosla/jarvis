@@ -8,9 +8,11 @@ import { C, L, header } from "./log.js";
 const SYSTEM = `You are Cooper, a home agent for a Home Assistant smart home.
 You are given a GOAL and live home state. Reason about what (if anything) to do RIGHT NOW.
 - Use get_live_context to read state before acting or answering.
-- Act via call_service. Reversible actions (lights/fans/media/climate) run automatically;
-  risky ones (locks, alarm, valve, garage/awning close, sirens) require user confirmation —
-  call_service will tell you when an action was deferred for confirmation. Never invent entities.
+- Act via call_service. Reversible actions (lights/fans/media/climate) run automatically; risky
+  ones (locks, alarm, valve, garage/awning close, sirens) need confirmation — call_service sends the
+  user a Yes/No on their phone and returns "Asked the user to confirm…" (it runs only if they tap
+  Yes; don't claim it's done). If it returns "[paused]", Cooper's kill-switch is on — tell the user
+  it's paused and you didn't act. Never invent entities.
 - Only act when the goal warrants it; for watch-goals, often the right answer is "nothing to do".
 - CAMERAS: the detection sensors (binary_sensor *_person / *_motion / *_occupancy) only tell you
   SOMETHING happened. To know WHAT, use look_at_camera to actually see the scene, then describe
@@ -81,7 +83,13 @@ function resolveCameras(raw: string, known: Set<string>, bad: Set<string> = new 
   return [...new Set(matches.sort((a, b) => rank(a) - rank(b)).map(swap))];
 }
 
-export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget): Promise<string> {
+/** Runtime hooks the guardian provides: a kill-switch check and an interactive-confirmation sender. */
+export interface Hooks {
+  paused?: () => boolean;
+  requestConfirm?: (domain: string, service: string, data: Record<string, unknown>, reason: string) => string;
+}
+
+export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget, hooks?: Hooks): Promise<string> {
   const anthropic = new Anthropic({ apiKey: cfg.anthropicKey });
   const log: string[] = [];
   const messages: Anthropic.MessageParam[] = [
@@ -169,6 +177,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
           if (tier !== "auto") { planned.push(`✗ ${s.domain}.${s.service} needs confirmation — not scheduling`); continue; }
           // Fire later from the running process (deterministic, no LLM at fire time).
           setTimeout(() => {
+            if (hooks?.paused?.()) { L(`    ${C.yellow}⏲ paused — skipped ${s.domain}.${s.service}${C.reset}`); return; }
             ha.callService(s.domain, s.service, s.data ?? {}).catch(() => {});
             L(`    ${C.green}⏲ fired: ${s.domain}.${s.service} ${JSON.stringify(s.data ?? {})} ${s.note ? `(${s.note})` : ""}${C.reset}`);
           }, delay * 1000);
@@ -201,7 +210,12 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         const tier = tierFor(a.domain, a.service);
         if (missing.length) out = `ERROR: no such entity: ${missing.join(", ")} — these do not exist; do NOT claim to control them`;
         else if (tier === "never") out = "REFUSED (forbidden action)";
-        else if (tier === "confirm") out = `DEFERRED for user confirmation: ${a.domain}.${a.service} (${a.reason})`;
+        else if (hooks?.paused?.()) out = "[paused] Cooper is paused (kill-switch on) — not acting; tell the user it's paused";
+        else if (tier === "confirm") {
+          if (cfg.observeMode) out = `[observe] would ask you to confirm ${a.domain}.${a.service}`;
+          else if (hooks?.requestConfirm) out = hooks.requestConfirm(a.domain, a.service, a.data ?? {}, a.reason ?? "");
+          else out = `DEFERRED for user confirmation: ${a.domain}.${a.service} (${a.reason})`;
+        }
         else if (cfg.observeMode) out = `[observe] would call ${a.domain}.${a.service} ${JSON.stringify(a.data ?? {})}`;
         else { await ha.callService(a.domain, a.service, a.data ?? {}); out = "done"; }
         const oc = out === "done" ? C.green : out.startsWith("ERROR") || out.startsWith("REFUSED") ? C.red : C.yellow;

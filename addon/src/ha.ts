@@ -124,4 +124,18 @@ export class HaClient {
     ws.on("close", () => setTimeout(() => this.subscribe(cb), 5000)); // auto-reconnect
     return ws;
   }
+
+  /** Subscribe to a specific HA event type (e.g. mobile_app_notification_action for Yes/No taps). */
+  onEvent(eventType: string, cb: (data: Record<string, any>) => void) {
+    const ws = new WebSocket(this.cfg.haWsUrl);
+    let id = 1;
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === "auth_required") ws.send(JSON.stringify({ type: "auth", access_token: this.cfg.haToken }));
+      else if (msg.type === "auth_ok") ws.send(JSON.stringify({ id: id++, type: "subscribe_events", event_type: eventType }));
+      else if (msg.type === "event") cb(msg.event?.data ?? {});
+    });
+    ws.on("close", () => setTimeout(() => this.onEvent(eventType, cb), 5000));
+    return ws;
+  }
 }
