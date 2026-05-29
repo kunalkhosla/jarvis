@@ -40,6 +40,9 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
   ];
   const textOf = (content: Anthropic.ContentBlock[]) =>
     content.filter((c): c is Anthropic.TextBlock => c.type === "text").map((c) => c.text).join("").trim();
+  // Lazily cache all real entity ids so we can reject hallucinated targets (anti-invention guard).
+  let knownIds: Set<string> | null = null;
+  const ensureIds = async () => (knownIds ??= new Set((await ha.getStates()).map((s) => s.entity_id)));
 
   L(`▶ goal: ${goal}  (observe=${cfg.observeMode}, model=${cfg.model})`);
   for (let step = 0; step < 12; step++) {
@@ -77,8 +80,12 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         else { for (const tgt of cfg.notifyTargets) await ha.notify(tgt, "Cooper", a.message); out = "notified"; }
         L(`    📲 notify -> ${out}`); log.push(out);
       } else if (t.name === "call_service") {
+        const ids: string[] = [a.data?.entity_id].flat().filter(Boolean);
+        await ensureIds();
+        const missing = ids.filter((id) => !knownIds!.has(id));
         const tier = tierFor(a.domain, a.service);
-        if (tier === "never") out = "REFUSED (forbidden action)";
+        if (missing.length) out = `ERROR: no such entity: ${missing.join(", ")} — these do not exist; do NOT claim to control them`;
+        else if (tier === "never") out = "REFUSED (forbidden action)";
         else if (tier === "confirm") out = `DEFERRED for user confirmation: ${a.domain}.${a.service} (${a.reason})`;
         else if (cfg.observeMode) out = `[observe] would call ${a.domain}.${a.service} ${JSON.stringify(a.data ?? {})}`;
         else { await ha.callService(a.domain, a.service, a.data ?? {}); out = "done"; }
