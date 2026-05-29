@@ -21,6 +21,10 @@ export function tierFor(domain: string, service: string): Tier {
   // Outright forbidden: account/config/integration mutation, deletions.
   if (["config", "hassio", "homeassistant"].includes(domain) && /delete|remove|purge/.test(service)) return "never";
   if (AUTO_DOMAINS.has(domain)) return "auto";
+  // Irrigation/watering is reversible and low-stakes (you can always stop the water) → auto, so the
+  // duration-capable start service can run without a per-zone confirmation. Matched by service name
+  // (e.g. start_watering / stop_watering / start_multiple_zone_schedule) so it's not brand-specific.
+  if (/(^|_)watering$|zone_schedule$/.test(service)) return "auto";
   // Unknown → be conservative.
   return "confirm";
 }

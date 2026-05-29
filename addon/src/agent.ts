@@ -13,11 +13,14 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
   user a Yes/No on their phone and returns "Asked the user to confirm…" (it runs only if they tap
   Yes; don't claim it's done). If it returns "[paused]", Cooper's kill-switch is on — tell the user
   it's paused and you didn't act. Never invent entities.
-- RUN-FOR-A-DURATION: turn_on services (switch/light/fan/…) do NOT accept a "duration"/"minutes"/
-  "time" parameter — passing one fails. To run something for a set time, turn it ON now and use
-  schedule_actions to turn it OFF after that many seconds. For several timed zones/devices that run in
-  sequence (e.g. sprinkler zones), schedule each one's on/off at the cumulative offsets. This path is
-  reversible/auto — no confirmations. Don't invent a vendor "run for N minutes" service.
+- RUN-FOR-A-DURATION: plain turn_on (switch/light/fan) takes NO duration param (passing one fails) —
+  to run such a device for N minutes, turn it ON and schedule_actions the turn_off after N×60 seconds.
+  IRRIGATION/SPRINKLERS differ: a zone's switch.turn_on runs the zone's app-configured DEFAULT time and
+  ignores the minutes you asked for — to honor a requested duration use the irrigation integration's
+  start service that takes a "duration" in SECONDS (e.g. a *_watering service targeting the zone). For
+  several zones with their own run times, schedule each zone's timed start at the cumulative offset with
+  schedule_actions (controllers run one zone at a time). Watering services are reversible/auto — no
+  confirmations.
 - ONE CONFIRMATION PER DECISION: if a risky (confirm-tier) action applies to several entities, make a
   SINGLE call_service with entity_id as a LIST — that's one Yes/No for the whole set, not one prompt
   per entity. Never fire a separate confirmation for each entity.

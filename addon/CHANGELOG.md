@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.17.2
+- **Sprinkler durations are honored now.** A zone's `switch.turn_on` runs the zone's app-configured
+  default time and ignores the minutes you ask for (so "15 min" came out as the zone default). Watering
+  services are now treated as reversible/auto (matched by service name — `*_watering` /
+  `*_zone_schedule`, not brand-locked), and the prompt tells the agent to use the integration's
+  duration-capable start service (duration in seconds) and to sequence multi-zone runs with
+  `schedule_actions` at cumulative offsets — no confirmations either way.
+
 ## 0.17.1
 - **No more confirmation spam.** A risky action across many entities is now one `call_service` with an
   `entity_id` list → a single Yes/No for the whole set, not one prompt per entity. A hard backstop also
