@@ -1,20 +1,11 @@
 # Cooper
 
-> A home you can just **talk to** — that **watches out for you** when you're not looking.
+**A home you can talk to.** A Claude-powered agent for Home Assistant — you say what you *want*, it figures out the *how*.
 
-Cooper is a **Claude-powered home agent** that runs as a **Home Assistant add-on**. It replaces
-off-the-shelf voice assistants with something both *faster* on the everyday stuff and *genuinely
-intelligent* on the hard stuff. The point isn't more automations ("if X then Y") — it's a
-**goal-driven agent** you talk to in plain language:
+> **You:** *"I'm leaving for an hour — keep an eye on the cameras."*
+> **Cooper:** *"On it. I'll watch the perimeter and flag anything that moves. Have a good hour."*
 
-> 🗣️ *"keep an eye on the house while we're out"*
-> 🗣️ *"is everything okay at home?"*
-> 🗣️ *"who's at the front door?"*
-> 🗣️ *"make it cozy"* · *"wind down for bed"* · *"water the garden if it won't rain"*
-
-It **reasons over live home state**, **looks through your cameras** (real vision, not just motion
-pings), **acts** with judgment, knows when to **ask first**, and **remembers** what it's watching
-across restarts.
+Not "if motion after sunset, then porch light." Cooper **reasons over your live home**, **sees through your cameras** (real vision, not motion pings), **acts** on the safe stuff, **asks** before the risky stuff, and **remembers** what it's watching across restarts. Deadpan personality optional.
 
 ## What it can do
 
