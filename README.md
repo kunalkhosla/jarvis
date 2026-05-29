@@ -129,6 +129,24 @@ Cooper Guardian installs like any Home Assistant add-on:
 The same image also runs as a plain Docker container for local development (set `HA_URL` +
 `HA_TOKEN` instead of the supervisor token).
 
+## Talk to it by voice (optional bridge)
+
+Make the Guardian reachable from Home Assistant's voice/chat assistant, so you can just *say*
+*"keep an eye on the house"* or *"make it look like someone's home"* and it routes to the agent:
+
+1. Create an **`input_text` helper** named `input_text.cooper_watch_request` (the add-on watches it).
+2. Add a **script** ("Ask Cooper") with a required `goal` text field whose only action sets that
+   helper to `{{ goal }}`. **Expose the script to Assist.**
+3. The Guardian picks up whatever lands in the helper and runs it — watch, schedule, presence sim,
+   camera check, or a direct task — then **notifies the result** back to your phone.
+4. In your **conversation agent's instructions**, add a routing rule: *"For anything needing
+   watching, scheduling, presence simulation, camera vision, or multi-step work, call the 'Ask
+   Cooper' script with the user's request as `goal`; handle simple control and direct questions
+   yourself."*
+
+Now the phone is a thin mic for the Guardian: simple commands resolve locally, everything agentic
+hands off to Cooper, which acts and reports back.
+
 ## Docs
 
 | Doc | What's in it |
