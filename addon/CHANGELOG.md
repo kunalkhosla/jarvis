@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.0
+- Standing "while away" watch: "keep an eye whenever we're out" arms automatically when everyone
+  leaves and stands down when someone's home — set once, re-arms every time (distinct from the
+  one-shot until-home watch).
+
 ## 0.10.0
 - Deferred / triggered do-goals: "prepare the home for my arrival" or "in an hour…" becomes a
   scheduled task (fires at a time, or when someone arrives home) instead of running immediately.
