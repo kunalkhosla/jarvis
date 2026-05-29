@@ -13,7 +13,8 @@ calendars, weather, presence, media players, a water shutoff valve).
 - **Freeze / leak guardian** — moisture sensors + low temperature + the water shutoff valve.
 - **Garage-left-open / doors-unlocked-at-night** watch.
 - **Energy guardian** — whole-home monitor anomalies; EV-charging cost / peak-rate avoidance.
-- **Camera/security triage** — person detection: "real visitor vs. delivery vs. nothing?"
+- **Camera/security triage (vision)** — a detection sensor trips → Cooper pulls a live snapshot and
+  *looks*: "real visitor vs. delivery vs. a cat vs. nothing?" and describes what it actually sees.
 - **Pet / elderly inactivity** detection.
 
 ## Do / task (one-shot agentic)

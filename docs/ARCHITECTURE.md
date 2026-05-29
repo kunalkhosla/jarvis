@@ -113,70 +113,29 @@ sequenceDiagram
     A->>A: persist state + update baseline
 ```
 
-## Deployment topology
+## Deployment — a Home Assistant add-on
 
-```mermaid
-flowchart TB
-    subgraph LAN["Home LAN"]
-      HA["Home Assistant (HAOS)"]
-      HOME["Home server<br/>Docker · ★ production host"]
-      HOME <-->|low latency, LAN| HA
-    end
-    subgraph CLOUD["Internet"]
-      VPS["Cloud VPS<br/>interim dev"]
-      REMOTE["HA cloud remote API"]
-      ANTH["Anthropic API"]
-    end
-    VPS -.->|interim, via| REMOTE -.-> HA
-    VPS --> ANTH
-    HOME --> ANTH
-```
-
-**Interim:** ship the container as an **HA add-on** (runs on the HA box — LAN-local, survives WAN
-outages, no separate host needed). **Production:** run the **same image** as a standalone Docker
-container on a **LAN-local home server** when available. (A remote cloud VPS is a poor fit for a
-guardian — it's blind to the home during WAN outages.)
-
-## Where the agent runs (hosting placement)
-
-Layer 1 (the conversation agent) **already runs inside HA** — it's an HA integration. The real
-question is **Layer 2, the guardian service.** Three placements:
+Cooper Guardian ships as an **HA add-on**: an *isolated container* managed by HA's supervisor (not
+code running inside HA's process). It runs on the HA box itself, so it's **LAN-local, low-latency,
+and survives WAN outages** from day one, with no separate host to maintain.
 
 ```mermaid
 flowchart TB
     subgraph BOX["HAOS host"]
       HACORE["HA core process"]
-      ADDON["B: HA add-on<br/>(isolated container)"]
-      COMP["C: custom integration<br/>(in HA's process)"]
-      HACORE --- COMP
+      ADDON["Cooper Guardian<br/>(add-on — isolated container)"]
+      ADDON <-->|REST · WebSocket on localhost| HACORE
     end
-    subgraph SRV["Separate LAN host"]
-      STANDALONE["A: standalone service ★"]
-    end
-    STANDALONE <-->|API/WS/MCP over LAN| HACORE
-    ADDON <-->|API/WS on localhost| HACORE
+    ADDON --> ANTH["Anthropic API"]
 ```
 
-| | **A. Standalone on LAN host ★** | **B. HA add-on** | **C. Custom integration (in-process)** |
-|---|---|---|---|
-| Latency to HA | LAN, ~1ms | localhost | none (in-process) |
-| Survives WAN outage | ✅ local | ✅ | ✅ |
-| Blast radius if it misbehaves | isolated | isolated container | ⛔ can crash HA |
-| Coupled to HA restarts/backups | no | partial | full |
-| Iteration / CI-CD speed | fast (own pipeline) | slower (build/install) | slowest, risky |
-| Needs a separate always-on host | yes | no | no |
+Why an isolated add-on rather than a custom integration that runs *inside* HA: a long-running LLM
+agent with a bug or memory leak should never be able to take the whole smart home down with it. An
+add-on container is firewalled from HA core — its blast radius is itself.
 
-**Recommendation: containerize it, run as a HA add-on now → portable standalone container later.**
-The agent is a Docker container either way. As an **HA add-on** (Option B — an *isolated* container
-managed by HA's supervisor, **not** code inside HA's process) it runs on the HA box today:
-**LAN-local and surviving WAN outages from day one**, with no separate host required. The **same
-image** later runs as a **standalone Docker container** on a dedicated LAN host (Option A) when one
-is available. One codebase → interim simplicity of B, long-term independence of A.
-
-- **Avoid C (custom integration / in-process).** A long-running LLM agent with a bug or memory
-  leak would take the whole smart home down with it; an isolated add-on container does not have
-  this risk. (AppDaemon is a similar middle ground to B, but a plain add-on container is more
-  portable.)
+The same image also runs as a plain **standalone Docker container** for local development (point it
+at HA with `HA_URL` + `HA_TOKEN` instead of the supervisor token) — handy for iterating without a
+build/install cycle on the HA box.
 
 ## Tech stack
 

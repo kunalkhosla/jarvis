@@ -1,8 +1,8 @@
 # Build plan
 
 Approach: build the **voice front-end and guardian agent in parallel**; autonomy =
-**act on safe / confirm risky**; develop on a convenient host first, run production on a
-**LAN-local home server**.
+**act on safe / confirm risky**; the guardian ships as a **Home Assistant add-on** (LAN-local,
+WAN-surviving, no separate host to maintain).
 
 ## Phase 0 — Registry hygiene (HARD PREREQUISITE)
 
@@ -36,11 +36,11 @@ So before anything else:
 4. Curate intents/scripts for common commands (the fast path).
 5. *(optional, later)* voice satellite + "Cooper" wake word for hands-free.
 
-## Track B — Guardian agent (containerized; HA add-on now → standalone on home server later)
+## Track B — Guardian agent (Home Assistant add-on)
 
-Packaged as a Docker container with an HA add-on wrapper (`config.yaml` + `Dockerfile`). Runs as
-an **add-on on the HA box** interim (LAN-local, WAN-surviving, no separate host); the **same
-image** moves to a standalone container on the home server later.
+Packaged as a Docker container with an HA add-on wrapper (`config.yaml` + `Dockerfile`). Runs as an
+**add-on on the HA box** — LAN-local, WAN-surviving, no separate host to maintain. (The same image
+also runs as a standalone container for local development.)
 
 1. **Core skeleton** — add-on scaffold (`config.yaml`, `Dockerfile`) + agent: goal registry;
    Claude tool-use loop with HA tools (via supervisor token on localhost); SQLite; the tiered
@@ -53,8 +53,8 @@ image** moves to a standalone container on the home server later.
 
 ## Then
 
-- Run Track B on the **LAN-local home server** for production reliability.
 - Retire the off-the-shelf assistant room by room as Cooper earns trust.
+- Expand the proactive layer (briefings, seasonal guardians) and the use-case catalog.
 
 ## Verification (per slice)
 
