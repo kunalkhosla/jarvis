@@ -13,6 +13,16 @@ export interface Goal {
   sawAway: boolean;         // has anyone been away since this goal started? (gates untilPresent)
 }
 
+/** A deferred do-goal: a one-shot task that fires on a trigger (a scheduled time and/or when
+ *  someone arrives home), rather than immediately. E.g. "prepare the home for my arrival". */
+export interface Task {
+  id: number;
+  text: string;
+  created: number;
+  runAt: number | null;   // epoch ms to fire at; null = not time-triggered
+  onArrival: boolean;     // fire when a household member arrives home
+}
+
 /** Where the DB lives. As an HA add-on, /data is the persisted volume; standalone falls back
  *  to the working dir. Override with COOPER_DB. */
 function dbPath(): string {
@@ -46,6 +56,13 @@ export class Store {
         goal_id INTEGER,
         kind    TEXT NOT NULL,
         detail  TEXT
+      );
+      CREATE TABLE IF NOT EXISTS tasks (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        text       TEXT NOT NULL,
+        created    INTEGER NOT NULL,
+        run_at     INTEGER,
+        on_arrival INTEGER NOT NULL DEFAULT 0
       );
     `);
     // Migrate older DBs that predate later columns (ignore if already present).
@@ -85,5 +102,24 @@ export class Store {
 
   logAction(ts: number, goalId: number | null, kind: string, detail: string): void {
     this.db.prepare("INSERT INTO action_log (ts, goal_id, kind, detail) VALUES (?, ?, ?, ?)").run(ts, goalId, kind, detail);
+  }
+
+  // ---- Deferred tasks ----
+  tasks(): Task[] {
+    const rows = this.db
+      .prepare("SELECT id, text, created, run_at, on_arrival FROM tasks ORDER BY id")
+      .all() as Array<{ id: number; text: string; created: number; run_at: number | null; on_arrival: number }>;
+    return rows.map((r) => ({ id: r.id, text: r.text, created: r.created, runAt: r.run_at, onArrival: !!r.on_arrival }));
+  }
+
+  addTask(text: string, created: number, runAt: number | null, onArrival: boolean): Task {
+    const info = this.db
+      .prepare("INSERT INTO tasks (text, created, run_at, on_arrival) VALUES (?, ?, ?, ?)")
+      .run(text, created, runAt, onArrival ? 1 : 0);
+    return { id: Number(info.lastInsertRowid), text, created, runAt, onArrival };
+  }
+
+  deleteTask(id: number): boolean {
+    return this.db.prepare("DELETE FROM tasks WHERE id = ?").run(id).changes > 0;
   }
 }

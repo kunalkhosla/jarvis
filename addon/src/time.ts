@@ -51,6 +51,22 @@ export function parseExpiry(text: string, now: number = Date.now()): number | nu
   return null;
 }
 
+/** Detect a deferred-task trigger in a do-goal: a scheduled time and/or "when I arrive home".
+ *  Returns { runAt, onArrival } — both falsy means "run now" (a normal immediate do-goal). */
+export function parseTrigger(text: string, now: number = Date.now()): { runAt: number | null; onArrival: boolean } {
+  const t = text.toLowerCase();
+  const onArrival = /\b(when (i|we) (get|am|are|'re)?\s*(home|back)|on (my |our )?arrival|when (i|we) arrive|almost home|nearly home|near(ing)? home|pulling in|on the way home)\b/.test(t);
+
+  let runAt: number | null = null;
+  // "in 30 minutes" / "in an hour"  OR  "30 minutes away" / "an hour out"
+  const m = t.match(/\b(?:in|after)\s+(\d+|an?)\s*(minute|min|hour|hr)s?\b/) || t.match(/\b(\d+|an?)\s*(minute|min|hour|hr)s?\s+(?:away|out|from home)\b/);
+  if (m) {
+    const n = /^an?$/.test(m[1]) ? 1 : Number(m[1]);
+    runAt = now + n * (m[2].startsWith("h") ? 3_600_000 : 60_000);
+  }
+  return { runAt, onArrival };
+}
+
 /** Does this goal want to stand down when the household returns home? (away/vacation watches) */
 export function wantsPresenceStandDown(text: string): boolean {
   const t = text.toLowerCase();

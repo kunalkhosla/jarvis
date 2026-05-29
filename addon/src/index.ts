@@ -2,10 +2,10 @@ import { createServer } from "node:http";
 import { loadConfig } from "./config.js";
 import { HaClient, EntityState } from "./ha.js";
 import { runGoal } from "./agent.js";
-import { Store, Goal } from "./store.js";
+import { Store, Goal, Task } from "./store.js";
 import { Budget } from "./budget.js";
 import { C, L as log, header } from "./log.js";
-import { parseExpiry, wantsPresenceStandDown } from "./time.js";
+import { parseExpiry, wantsPresenceStandDown, parseTrigger } from "./time.js";
 
 const cfg = loadConfig();
 const ha = new HaClient(cfg);
@@ -15,6 +15,8 @@ const budget = new Budget(cfg.maxLlmCallsPerHour, cfg.maxLlmCallsPerDay);
 // `goals` is the hot-path in-memory cache, write-through to the store on every mutation.
 const store = new Store();
 const goals: Goal[] = store.watchGoals();
+const tasks: Task[] = store.tasks(); // deferred do-goals (scheduled / arrival-triggered)
+const firing = new Set<number>();    // task ids mid-fire, to avoid double-firing
 let tmpId = -1; // transient ids for one-shot do-goals (never collide with SQLite rowids)
 const COOLDOWN_MS = 120_000; // min gap between evaluations of the same watch-goal
 
@@ -24,13 +26,33 @@ log(`${C.bold}${C.green}Cooper Guardian starting${C.reset} — model=${cfg.model
 createServer(async (req, res) => {
   const json = (code: number, body: unknown) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)); };
   if (req.url === "/healthz")
-    return json(200, { ok: true, observe: cfg.observeMode, budget: budget.stats(Date.now()), goals: goals.map((g) => ({ id: g.id, type: g.type, text: g.text, expires: g.expires ? new Date(g.expires).toISOString() : null, untilHome: g.untilPresent || undefined })) });
+    return json(200, {
+      ok: true, observe: cfg.observeMode, budget: budget.stats(Date.now()),
+      goals: goals.map((g) => ({ id: g.id, type: g.type, text: g.text, expires: g.expires ? new Date(g.expires).toISOString() : null, untilHome: g.untilPresent || undefined })),
+      tasks: tasks.map((t) => ({ id: t.id, text: t.text, runAt: t.runAt ? new Date(t.runAt).toISOString() : null, onArrival: t.onArrival })),
+    });
   if (req.method === "POST" && req.url === "/goal") {
     let raw = ""; for await (const c of req) raw += c;
-    const { text, type, expires } = JSON.parse(raw || "{}");
+    const { text, type, expires, run_at, on_arrival } = JSON.parse(raw || "{}");
     if (!text) return json(400, { error: "text required" });
     const isWatch = type === "watch";
     const now = Date.now();
+
+    // A do-goal with a trigger (scheduled time and/or arrival) becomes a deferred TASK, not a
+    // run-now goal. e.g. "prepare the home for my arrival" / "in an hour, warm up the house".
+    if (!isWatch) {
+      const parsed = parseTrigger(text, now);
+      const runAt = run_at != null ? (typeof run_at === "number" ? run_at : Date.parse(run_at) || null) : parsed.runAt;
+      const onArrival = on_arrival != null ? !!on_arrival : parsed.onArrival;
+      if (runAt || onArrival) {
+        const tk = store.addTask(text, now, runAt, onArrival); tasks.push(tk);
+        const when = [runAt ? `at ${new Date(runAt).toISOString()}` : "", onArrival ? "on arrival home" : ""].filter(Boolean).join(" / ");
+        header(`🗓 task #${tk.id} scheduled (${when}): "${text}"`);
+        store.logAction(now, null, "task:create", `${when}: ${text}`);
+        return json(200, { id: tk.id, scheduled: true, runAt: runAt ? new Date(runAt).toISOString() : null, onArrival });
+      }
+    }
+
     // expires accepts epoch ms or ISO/parseable string; if absent, infer from the goal text
     // ("...until Monday evening", "...for 2 hours"). null = open-ended.
     const expMs = expires == null ? parseExpiry(text, now) : (typeof expires === "number" ? expires : Date.parse(expires) || null);
@@ -54,6 +76,12 @@ createServer(async (req, res) => {
     const id = Number(req.url.split("/")[2]); const i = goals.findIndex((g) => g.id === id);
     if (i < 0) return json(404, { error: "no such goal" });
     goals.splice(i, 1); store.deleteGoal(id);
+    return json(200, { deleted: id });
+  }
+  if (req.method === "DELETE" && req.url?.startsWith("/task/")) {
+    const id = Number(req.url.split("/")[2]); const i = tasks.findIndex((t) => t.id === id);
+    if (i < 0) return json(404, { error: "no such task" });
+    tasks.splice(i, 1); store.deleteTask(id);
     return json(200, { deleted: id });
   }
   json(404, { error: "not found" });
@@ -90,9 +118,12 @@ ha.subscribe((entityId, st) => {
     ha.callService("input_text", "set_value", { entity_id: WATCH_REQUEST, value: "" }).catch(() => {}); // clear for next time
     return;
   }
+  // Presence change → fire arrival tasks + check away-watch stand-down (deterministic, no LLM).
+  if (entityId.startsWith("person.")) {
+    if (st.state === "home" && tasks.some((t) => t.onArrival)) fireArrivalTasks(Date.now());
+    checkPresenceStandDown(Date.now()).catch(() => {});
+  }
   if (!goals.some((g) => g.type === "watch")) return;
-  // Presence change → check away-watch stand-down immediately (deterministic, no LLM needed).
-  if (entityId.startsWith("person.")) checkPresenceStandDown(Date.now()).catch(() => {});
   if (!interesting(entityId, st)) return;
   buffer.push(`${new Date().toISOString()}  ${entityId} -> ${st.state}`);
   if (timer) clearTimeout(timer);
@@ -127,6 +158,22 @@ async function checkPresenceStandDown(now: number) {
     if (g.sawAway && allHome) standDown(g, now, "watch:home", `Welcome home — standing down from "${g.text}".`);
   }
 }
+
+// Fire a deferred task exactly once: remove it up front (so it can't re-fire), then run it.
+async function fireTask(tk: Task, now: number, reason: string) {
+  if (firing.has(tk.id)) return;
+  firing.add(tk.id);
+  const i = tasks.indexOf(tk); if (i >= 0) tasks.splice(i, 1);
+  store.deleteTask(tk.id);
+  header(`🏠 TASK fire #${tk.id} (${reason}): "${tk.text}"`);
+  try { const r = await runGoal(cfg, ha, tk.text, `(deferred task — ${reason})`, budget); store.logAction(now, null, "task:fire", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
+  catch (e) { log(`   ${C.red}task #${tk.id} error: ${e}${C.reset}`); }
+  finally { firing.delete(tk.id); }
+}
+
+const fireDueTimeTasks = (now: number) => { for (const tk of tasks.filter((t) => t.runAt && now >= t.runAt)) fireTask(tk, now, "scheduled time"); };
+const fireArrivalTasks = (now: number) => { for (const tk of tasks.filter((t) => t.onArrival)) fireTask(tk, now, "arrived home"); };
+setInterval(() => fireDueTimeTasks(Date.now()), 30_000); // catches scheduled + any missed during downtime
 
 async function processBuffer() {
   const events = buffer; buffer = []; timer = null;
