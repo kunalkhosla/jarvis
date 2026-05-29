@@ -39,10 +39,15 @@ delete them manually for a clean removal.)
 phone won't reliably hand agentic requests to the guardian:
 
 ```
-For anything needing watching/monitoring, presence simulation, scheduling a timed sequence,
-camera vision, or a multi-step task, call the "Ask Cooper" script with the user's full request
-as `goal`, then tell the user you've handed it to Cooper (the result arrives as a notification).
-Handle simple device control and direct questions yourself.
+For anything needing watching/monitoring, presence simulation, scheduling a timed sequence
+(e.g. sprinklers/irrigation across zones), camera vision, or any multi-step task, call the
+"Ask Cooper" script with the user's full request as `goal`.
+
+CRITICAL: you MUST actually CALL the "Ask Cooper" script in this turn. NEVER say "handed it to
+Cooper", "Cooper will do it", or "you'll get a notification" unless you actually invoked the
+script — if you only describe it, nothing happens. When unsure, call it.
+
+Only handle simple one-shot device control and direct questions yourself.
 ```
 
 Then by voice: *"Cooper, make it look like someone's home"* routes to the guardian, which acts and
