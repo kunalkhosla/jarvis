@@ -26,12 +26,10 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
   genuine safety (an unrecognized person while away, someone at night, smoke/fire/flood/leak) —
   critical bypasses silent & Do-Not-Disturb, so do not overuse it.
 - PRESENCE SIMULATION ("make it look like someone's home", away/vacation watch): make the home look
-  lived-in, never robotic. Use the sun entity (next dusk) and the current time — only run lights in
-  the evening, off overnight. Each check, nudge ONE or two believable rooms (living/family/kitchen
-  early evening; wind down to a single light then off around a believable bedtime ~22:30); VARY which
-  rooms and exact times so it never looks like a fixed timer. Optionally brief media for sound. Avoid
-  outdoor/security lights blazing all night. This needs observe_mode off to actually act; in observe
-  mode, report what you would do.
+  lived-in, never robotic. PLAN the whole sequence yourself with schedule_actions — pick believable,
+  UNEVEN timings (not a fixed metronome), follow dusk/bedtime, nudge one or two rooms at a time, wind
+  down to a single light then off. Schedule it in one shot; the steps then fire on their own. Avoid
+  outdoor/security lights blazing all night. Needs observe_mode off to actually act.
 - ARRIVAL PREP ("prepare the home for my arrival"): make it welcoming for right now — comfortable
   climate, entry/main lights on if it's dark (check the sun), maybe gentle media; don't touch
   bedrooms or anything disruptive. Reversible only; confirm anything risky. Needs observe_mode off
@@ -56,6 +54,10 @@ const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", required: ["cameras"], properties: { cameras: { type: "array", items: { type: "string" } } } } },
   { name: "get_forecast", description: "HA's local weather forecast for the home's exact location. Use this for ANY weather question — never web-search weather. Optional type: daily (default) or hourly.",
     input_schema: { type: "object", properties: { type: { type: "string", enum: ["daily", "hourly"] } } } },
+  { name: "schedule_actions", description: "Schedule a SEQUENCE of reversible actions to run over time — YOU plan the believable timing. Use for presence simulation ('make it look like someone's home') or anything spread across minutes/hours. Each step fires after 'after_seconds' from now. Reversible actions only (lights/fans/media/climate); risky ones are rejected.",
+    input_schema: { type: "object", required: ["steps"], properties: { steps: { type: "array", items: {
+      type: "object", required: ["after_seconds", "domain", "service"],
+      properties: { after_seconds: { type: "number" }, domain: { type: "string" }, service: { type: "string" }, data: { type: "object" }, note: { type: "string" } } } } } } },
   { name: "notify", description: "Send a push notification. 'camera' (entity_id/name) attaches a live photo. 'priority' sets urgency by YOUR judgment of severity: normal=routine FYI, high=wants attention now (visitor/package), critical=genuine safety only (intruder/smoke/flood) — critical bypasses silent & Do-Not-Disturb and sounds the alarm channel.",
     input_schema: { type: "object", required: ["message"], properties: { message: { type: "string" }, camera: { type: "string" }, priority: { type: "string", enum: ["normal", "high", "critical"] } } } },
   { name: "finish", description: "End: summarize what you did / decided.",
@@ -153,6 +155,27 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         L(`    ${C.cyan}📷 look_at_camera(${names.join(",")}) -> ${nImg} image(s)${C.reset}`); log.push(`looked at ${nImg} camera(s)`);
         results.push({ type: "tool_result", tool_use_id: t.id, content: blocks.length ? blocks : [{ type: "text", text: "no images" }] });
         continue;
+      }
+      else if (t.name === "schedule_actions") {
+        const steps: any[] = Array.isArray(a.steps) ? a.steps.slice(0, 30) : [];
+        await ensureIds();
+        const planned: string[] = [];
+        for (const s of steps) {
+          const delay = Math.max(0, Number(s.after_seconds) || 0);
+          const tier = tierFor(s.domain, s.service);
+          const ids: string[] = [s.data?.entity_id].flat().filter(Boolean);
+          const missing = ids.filter((id) => !knownIds!.has(id));
+          if (missing.length) { planned.push(`✗ no such entity: ${missing.join(",")}`); continue; }
+          if (tier !== "auto") { planned.push(`✗ ${s.domain}.${s.service} needs confirmation — not scheduling`); continue; }
+          // Fire later from the running process (deterministic, no LLM at fire time).
+          setTimeout(() => {
+            ha.callService(s.domain, s.service, s.data ?? {}).catch(() => {});
+            L(`    ${C.green}⏲ fired: ${s.domain}.${s.service} ${JSON.stringify(s.data ?? {})} ${s.note ? `(${s.note})` : ""}${C.reset}`);
+          }, delay * 1000);
+          planned.push(`+${delay}s ${s.domain}.${s.service} ${s.note ?? ""}`);
+        }
+        out = planned.length ? `scheduled ${planned.filter((p) => !p.startsWith("✗")).length}/${steps.length}:\n${planned.join("\n")}` : "no steps";
+        L(`    ${C.cyan}⏲ schedule_actions -> ${steps.length} step(s)${C.reset}`); log.push(`scheduled ${steps.length} timed action(s)`);
       }
       else if (t.name === "get_forecast") {
         const fc = await ha.getForecast(a.type === "hourly" ? "hourly" : "daily");

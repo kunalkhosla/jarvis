@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0
+- Cooper can now plan and run timed action SEQUENCES itself (new schedule_actions tool). Ask it to
+  "make it look like someone's home" and it designs a believable, uneven on/off light schedule and
+  the steps fire on their own over time — no scripting, no LLM per step. Reversible actions only;
+  risky ones are rejected.
+
 ## 0.11.6
 - Camera lookup now tries candidate cameras until one actually returns an image — so a name like
   "driveway" no longer fails on a dead cam that reports a healthy state; it falls through to a
