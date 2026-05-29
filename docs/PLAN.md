@@ -25,9 +25,16 @@ So before anything else:
 
 1. Add HA **Anthropic Conversation** integration; set as the conversation agent with
    "prefer local intents, fall back to Claude." Test via the HA app (text + voice).
-2. Tune Claude's system prompt: house context, personality, the curated live-entity surface.
-3. Curate intents/scripts for common commands (the fast path).
-4. *(optional, later)* voice satellite + "Jarvis" wake word for hands-free.
+2. **Web search — MANDATORY gate for adoption.** The phone assistant can't be switched off the
+   stock cloud assistant until Claude can answer live web queries. Add a `web_search` tool:
+   - *Route A (fast):* a `rest_command`/`script` calling a search API (Tavily / Brave) exposed to
+     the conversation agent.
+   - *Route B (best):* route Assist to a custom Claude backend with Anthropic's native `web_search`
+     server-tool (also unifies the brain with Track B's guardian agent).
+   Needs a dedicated search-API key.
+3. Tune Claude's system prompt: house context, personality, the curated live-entity surface.
+4. Curate intents/scripts for common commands (the fast path).
+5. *(optional, later)* voice satellite + "Jarvis" wake word for hands-free.
 
 ## Track B — Guardian agent (service)
 

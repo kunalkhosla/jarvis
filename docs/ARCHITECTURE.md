@@ -23,9 +23,14 @@ device's default assistant (replacing the stock one).
 **What the front-end can / can't answer** (when set as your phone assistant):
 - ✅ Home control, general knowledge, unit conversions, reasoning (from Claude's own knowledge).
 - ✅ Local weather — read from the HA weather entity (current + forecast), not a web lookup.
-- ❌ **Live web search / real-time facts** (news, scores, "search the web") — Claude in HA has no
-  internet tool by default; it answers from training knowledge or declines. Addable later by
-  wiring a web-search tool/MCP into the agent — the one capability gap vs. a cloud assistant.
+- ⚠️ **Live web search / real-time facts** (news, scores, "search the web") — Claude in HA has no
+  internet tool by default. **This is a required capability** (the assistant can't replace a cloud
+  assistant on a phone without it), so a web-search tool is part of Layer 1, not optional:
+  - **Route A (fast):** add a `web_search` tool — a `rest_command`/`script` calling a search API
+    (Tavily, Brave Search, etc.) — and expose it to the conversation agent.
+  - **Route B (best):** route HA Assist to a custom Claude backend with Anthropic's native
+    `web_search` server-tool enabled (also unifies the brain with the guardian agent).
+  - Needs a dedicated search-API key, never committed.
 
 ### Layer 2 — Guardian agent service (the novel core)
 A persistent, goal-driven Claude agent. Two goal shapes, one engine:
