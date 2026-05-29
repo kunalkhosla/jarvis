@@ -82,7 +82,7 @@ flowchart LR
     PHONE["📲 notify (+photo) / 🔊 TTS"]
 
     CONV --> CLAUDE
-    CONV -.->|hands off agentic requests<br/>(Ask Cooper bridge)| TRIG
+    CONV -.->|"hands off agentic requests (Ask Cooper bridge)"| TRIG
     LOOP -->|reason + vision| CLAUDE
     WS --> TRIG
     LOOP <-->|state · camera snapshots| REST

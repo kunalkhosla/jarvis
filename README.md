@@ -100,7 +100,7 @@ flowchart TB
     INTENT -->|complex| CONV
     CONV --> CLAUDE
     CONV --> API
-    CONV -.->|hands off agentic requests<br/>(bridge)| LOOP
+    CONV -.->|"hands off agentic requests (bridge)"| LOOP
 
     LOOP <-->|state · events · camera snapshots| API
     LOOP -->|reason + vision| CLAUDE
