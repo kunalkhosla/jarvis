@@ -34,6 +34,13 @@ Not "motion detected at 2:47pm" — a description of **what's actually happening
 you when something genuinely warrants it — a door opening when no one's home, the garage left open
 at night, a person in the yard after dark.
 
+🏖️ **Goes away with you — and house-sits.** *"We're out until Monday evening — keep an eye on the
+place and make it look like someone's home."* Cooper runs a time-boxed watch **and simulates
+presence intelligently**: lights, TV and blinds follow your *actual* routines and the sunset,
+varied night to night so it never loops like a robotic timer, winding down at a believable bedtime.
+If a camera catches someone lingering at the gate, it escalates to a **critical** alert with the
+photo. Monday evening, it stands down on its own.
+
 🤖 **Acts safely.** Reversible things (lights, climate, media, fans) just happen. Risky things
 (locks, alarm, garage, water valve) **always ask first**. Forbidden things **never** happen. Ships
 in observe-only mode with a kill switch.

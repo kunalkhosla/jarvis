@@ -15,6 +15,10 @@ calendars, weather, presence, media players, a water shutoff valve).
 - **Energy guardian** — whole-home monitor anomalies; EV-charging cost / peak-rate avoidance.
 - **Camera/security triage (vision)** — a detection sensor trips → Cooper pulls a live snapshot and
   *looks*: "real visitor vs. delivery vs. a cat vs. nothing?" and describes what it actually sees.
+- **"Away till Monday — watch the place and make it look lived-in"** — a *time-boxed* watch + smart
+  presence simulation: lights/TV/blinds follow learned routines + dusk, varied day to day (not a
+  robotic loop), winding down at a believable bedtime; escalates real anomalies to critical alerts;
+  stands down automatically when the window ends. (Smarter than a fixed "vacation mode" scene.)
 - **Pet / elderly inactivity** detection.
 
 ## Do / task (one-shot agentic)
