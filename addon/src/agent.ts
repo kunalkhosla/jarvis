@@ -10,7 +10,10 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
   risky ones (locks, alarm, valve, garage/awning close, sirens) require user confirmation —
   call_service will tell you when an action was deferred for confirmation. Never invent entities.
 - Only act when the goal warrants it; for watch-goals, often the right answer is "nothing to do".
-- Use web_search for live external facts. Use notify to alert the user. Call finish when done.`;
+- Use web_search for live external facts. Use notify to alert the user. Call finish when done.
+- REPORT FAITHFULLY from tool results: if call_service returns "[observe]" the action was NOT
+  performed (observe mode) — say you *would* do it, never claim you did. If it returns "DEFERRED",
+  it needs the user's confirmation — say so, don't claim success.`;
 
 /** Pulls live web facts. Returns text; configured per search_provider. */
 async function webSearch(cfg: Config, query: string): Promise<string> {
@@ -63,7 +66,17 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string): Promise<
       const a = t.input as any;
       let out = "";
       if (t.name === "finish") return a.summary;
-      else if (t.name === "get_live_context") out = JSON.stringify(await ha.liveContext(a.domains)).slice(0, 12000);
+      else if (t.name === "get_live_context") {
+        const ents = await ha.liveContext(a.domains);
+        const compact = ents.map((e) => {
+          const at = e.attributes as Record<string, unknown>;
+          const o: Record<string, unknown> = { id: e.entity_id, name: at.friendly_name, state: e.state };
+          for (const k of ["current_temperature", "temperature", "humidity", "device_class"])
+            if (at[k] !== undefined) o[k] = at[k];
+          return o;
+        });
+        out = JSON.stringify(compact).slice(0, 30000);
+      }
       else if (t.name === "web_search") out = await webSearch(cfg, a.query);
       else if (t.name === "notify") {
         if (cfg.observeMode) { out = "[observe] would notify: " + a.message; }
