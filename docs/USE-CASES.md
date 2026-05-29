@@ -49,6 +49,12 @@ calendars, weather, presence, media players, a water shutoff valve).
 - **Energy** — weekly report; EV charging-cost optimization.
 - **Leave-soon** reminder from calendar + travel time.
 
+## How you invoke them
+Just **say it to your phone** — the voice bridge hands the request to the guardian, which acts and
+notifies the result. (Or `POST /goal` for testing.) Watch alerts carry an agent-chosen urgency
+(normal / high / **critical** — critical bypasses Do-Not-Disturb).
+
 ## Patterns, not a fixed list
-Watch-goals and do-goals run on the same engine (reason → act/alert → remember). New use-cases are
-mostly new *prompts/goals*, not new code — that's the point of an agent vs. brittle automations.
+Watch-goals, do-goals, and deferred tasks run on the same engine (reason → see → act/alert →
+remember). New use-cases are mostly new *prompts/goals*, not new code — that's the point of an agent
+vs. brittle automations.

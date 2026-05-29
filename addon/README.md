@@ -6,8 +6,10 @@ judgment, sees through your cameras, and knows when to ask first.
 
 ## What it does
 - **Claude tool-use loop** (`src/agent.ts`) with tools: `get_live_context`, `look_at_camera`
-  (vision — sees live snapshots), `call_service` (guardrailed), `web_search` (native), `notify`
-  (attaches a camera photo + agent-chosen priority), `finish`.
+  (vision — sees live snapshots), `call_service` (guardrailed), `get_forecast` (HA's local weather,
+  not a web lookup), `schedule_actions` (plan a timed sequence — e.g. presence simulation),
+  `web_search` (native), `notify` (attaches a camera photo + agent-chosen priority: normal/high/
+  critical), `finish`.
 - **Watch-goals & do-goals.** Watch-goals react to relevant home events (filtered, debounced) plus
   a heartbeat; do-goals are one-shot tasks. Both run on the same reason → act → verify loop.
 - **Time-boxed & presence-aware.** "Watch until Monday evening" auto-stands-down when the window
@@ -28,7 +30,23 @@ judgment, sees through your cameras, and knows when to ask first.
   a goal. Watch/expiry/arrival triggers are also inferred from the text.
 - `DELETE /goal/:id` · `DELETE /task/:id` — cancel a watch-goal or a scheduled task.
 
-Or just talk to it from the HA voice assistant (it bridges via an `input_text` helper).
+**Voice bridge:** on first run the add-on self-provisions a bridge — it creates an `input_text`
+helper + an **"Ask Cooper"** script and exposes it to Assist. (Uninstalling leaves them behind —
+delete them manually for a clean removal.)
+
+**Required manual step — add this routing instruction to your conversation agent's prompt**
+(Settings → Devices & Services → your Anthropic Conversation agent → Instructions). Without it the
+phone won't reliably hand agentic requests to the guardian:
+
+```
+For anything needing watching/monitoring, presence simulation, scheduling a timed sequence,
+camera vision, or a multi-step task, call the "Ask Cooper" script with the user's full request
+as `goal`, then tell the user you've handed it to Cooper (the result arrives as a notification).
+Handle simple device control and direct questions yourself.
+```
+
+Then by voice: *"Cooper, make it look like someone's home"* routes to the guardian, which acts and
+notifies the result.
 
 ## Config (add-on options; env for standalone dev)
 | Option | Env | Notes |

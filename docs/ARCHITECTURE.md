@@ -20,25 +20,32 @@ HA-config only — no service to host. Voice satellites (HA Voice PE / ESPHome, 
 are an optional later add; text/app works day one. On Android, HA Assist can be set as the
 device's default assistant (replacing the stock one).
 
-**What the front-end can / can't answer** (when set as your phone assistant):
-- ✅ Home control, general knowledge, unit conversions, reasoning (from Claude's own knowledge).
-- ✅ Local weather — read from the HA weather entity (current + forecast), not a web lookup.
-- ⚠️ **Live web search / real-time facts** (news, scores, "search the web") — Claude in HA has no
-  internet tool by default. **This is a required capability** (the assistant can't replace a cloud
-  assistant on a phone without it), so a web-search tool is part of Layer 1, not optional:
-  - **Route A (fast):** add a `web_search` tool — a `rest_command`/`script` calling a search API
-    (Tavily, Brave Search, etc.) — and expose it to the conversation agent.
-  - **Route B (best):** route HA Assist to a custom Claude backend with Anthropic's native
-    `web_search` server-tool enabled (also unifies the brain with the guardian agent).
-  - Needs a dedicated search-API key, never committed.
+**What the front-end answers** (when set as your phone assistant):
+- ✅ Home control, general knowledge, unit conversions, reasoning (Claude's own knowledge).
+- ✅ Local weather — from the HA weather entity (current + forecast), not a web lookup.
+- ✅ **Live web / real-time facts** (news, scores, "search the web") — via Anthropic's **native
+  `web_search`** server-tool, enabled on the HA *Anthropic Conversation* integration. No third-party
+  search key needed. This was the gate for replacing a stock cloud assistant on a phone — resolved.
+
+The guardian (Layer 2) hands off from the phone via a lightweight **bridge** (an exposed "Ask
+Cooper" script → an `input_text` helper it watches), so anything agentic said to the phone routes
+to the guardian, which acts and notifies the result.
 
 ### Layer 2 — Guardian agent service (the novel core)
-A persistent, goal-driven Claude agent. Two goal shapes, one engine:
+A persistent, goal-driven Claude agent (an HA add-on). Goal shapes, one engine:
 - **Watch-goals** ("keep an eye", "look after the house") — long-running; wakes on HA WebSocket
-  state-changes (instant) + a periodic heartbeat; compares to a learned baseline; acts/alerts
-  **only when warranted**.
-- **Do-goals** ("clean the pool") — one-shot: interpret → discover capability → act →
-  **verify it happened** → report.
+  state-changes (instant, incl. camera person/motion sensors) + a periodic heartbeat; acts/alerts
+  **only when warranted**. Time-boxable ("until Monday"), presence-aware (stand down when everyone's
+  home), and can be **standing** (auto-arm whenever everyone leaves).
+- **Do-goals** ("clean the pool", "make it cozy") — one-shot: interpret → act → **verify** → report.
+- **Tasks** (deferred do-goals) — fire on a scheduled time or on arrival home ("prepare the house").
+
+Tools the agent wields: `get_live_context`, **`look_at_camera`** (vision — pulls a live snapshot and
+*sees* the scene), `call_service` (guardrailed, anti-hallucination-checked), **`get_forecast`** (HA's
+local forecast), **`schedule_actions`** (plans + runs its own timed sequence — e.g. presence
+simulation), native `web_search`, and `notify` (with a camera photo + an agent-chosen urgency:
+normal / high / critical). A **cost guard** caps automatic LLM calls per hour/day; everything is
+event-driven (one snapshot per trigger, never a live video feed), so idle costs nothing.
 
 ### Layer 3 — Proactive layer
 Scheduled/event-driven intelligence the agent initiates: morning briefing, anomaly heads-up,
@@ -55,32 +62,30 @@ flowchart LR
       CONV["Claude conversation agent 🧠"]
       WS[("WebSocket: state events")]
       REST[("REST API")]
-      MCP[("MCP /api/mcp")]
-      DEV["Devices & sensors"]
+      DEV["Devices & sensors<br/>(incl. cameras)"]
       ASSIST --> INTENT --> CONV
       WS --- DEV
       REST --- DEV
-      MCP --- DEV
     end
 
-    subgraph SVC["Guardian Agent (Docker)"]
+    subgraph SVC["Cooper Guardian (HA add-on)"]
       direction TB
-      TRIG["Triggers: WS events + heartbeat"]
-      LOOP["Goal loop: reason · act · verify"]
-      GUARD["Guardrail policy"]
-      MEM[("SQLite: goals · baselines · action log")]
+      TRIG["Triggers: WS events + heartbeat + tasks"]
+      LOOP["Goal loop: reason · see · act · verify"]
+      GUARD["Guardrails + cost guard"]
+      MEM[("SQLite: goals · tasks · log")]
       TRIG --> LOOP --> GUARD
       LOOP <--> MEM
     end
 
     CLAUDE[["Anthropic API · Haiku→Sonnet/Opus"]]
-    PHONE["📲 notify / 🔊 TTS"]
+    PHONE["📲 notify (+photo) / 🔊 TTS"]
 
     CONV --> CLAUDE
-    LOOP --> CLAUDE
+    CONV -.->|hands off agentic requests<br/>(Ask Cooper bridge)| TRIG
+    LOOP -->|reason + vision| CLAUDE
     WS --> TRIG
-    LOOP <--> REST
-    LOOP <--> MCP
+    LOOP <-->|state · camera snapshots| REST
     GUARD --> REST
     LOOP --> PHONE
 ```
@@ -92,11 +97,11 @@ sequenceDiagram
     participant E as HA event / heartbeat
     participant A as Agent loop
     participant Cl as Claude
-    participant H as HA (MCP/REST)
+    participant H as HA (REST/WS)
     participant U as User (phone)
 
-    E->>A: state change (motion/door) or tick
-    A->>H: GetLiveContext (current state)
+    E->>A: state change (motion/door/person) or tick
+    A->>H: read live state (+ camera snapshot if useful)
     A->>Cl: goal + state + history → "what now?"
     Cl-->>A: action(s) | alert | no-op
     alt safe / reversible
@@ -139,17 +144,19 @@ build/install cycle on the HA box.
 
 ## Tech stack
 
-- **Language/SDK:** TypeScript + `@anthropic-ai/sdk` (or the Claude Agent SDK) — a tool-use loop.
-- **Model tiering:** Haiku for routine "is this normal?" checks; escalate to Sonnet/Opus for
-  judgment & multi-step planning. Event-driven (one call per real event) → low cost.
-- **HA access:** REST + WebSocket (state subscription) + MCP (`GetLiveContext`, `Hass*`); plus
-  camera snapshot, calendar, history/logbook, notify, tts.
-- **State:** SQLite — active goals, baselines, action log, agent memory.
-- **Deploy:** Docker + a reverse proxy; `compose.yml` / `.env`; a `/healthz` endpoint.
-- **Secrets:** a dedicated project Anthropic key + a dedicated scoped HA token; `.env` / secrets
-  manager only — never committed.
+- **Language/SDK:** TypeScript + `@anthropic-ai/sdk` — a tool-use loop (`addon/src/`).
+- **Model tiering:** Haiku for cheap routine checks; Sonnet for sharper judgment & multi-step
+  planning (configurable). Event-driven (one call per real trigger) + cost caps → low cost.
+- **HA access:** REST + WebSocket only — live state, the state-change subscription, service calls,
+  camera snapshots (`camera_proxy`), the weather forecast service, and `notify`. No MCP, no shell.
+- **State:** SQLite (`/data`) — goals, tasks, action log.
+- **Deploy:** a Home Assistant **add-on** (`config.yaml` + `Dockerfile`); `GET /healthz` +
+  `POST /goal` control surface. The same image runs as a standalone container for local dev.
+- **Secrets:** a dedicated project Anthropic key (add-on option / env); never committed.
 
 ## Tool-use safety order
 
-Actions prefer the most constrained surface that does the job — **MCP → REST API → SSH**. The
-agent's guardrails ([GUARDRAILS.md](GUARDRAILS.md)) encode the same instinct for autonomous actions.
+The guardian reaches HA only through its **REST + WebSocket** API — the least-powerful surface that
+does the job, with **no shell and no config-file access** (so a bug can't rewrite your HA config).
+Its tiered guardrails ([GUARDRAILS.md](GUARDRAILS.md)) encode the same least-privilege, human-in-
+the-loop-on-irreversible posture for the actions themselves.

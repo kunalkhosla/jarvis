@@ -117,41 +117,19 @@ A lightweight **bridge** links them: the front-end forwards anything agentic (wa
 presence simulation, camera checks) to the Guardian, which acts and notifies the result — so the
 voice assistant becomes a thin mic for the Guardian's full toolset.
 
-## Install
+## Install & setup
 
-Cooper Guardian installs like any Home Assistant add-on:
+Cooper Guardian installs like any Home Assistant add-on — **Settings → Add-ons → Add-on Store → ⋮ →
+Repositories**, add `https://github.com/kunalkhosla/cooper`, then install **Cooper Guardian**. On
+first run it self-provisions the voice bridge (an `input_text` helper + an "Ask Cooper" script,
+exposed to Assist).
 
-1. **Settings → Add-ons → Add-on Store → ⋮ → Repositories** → add `https://github.com/kunalkhosla/cooper`
-2. Install **Cooper Guardian**, then set its options:
-   - `anthropic_api_key` — a dedicated, project-specific key
-   - `model` — `claude-haiku-4-5` for cheap always-on watching, or a Sonnet model for sharper reasoning
-   - `observe_mode: true` — log intended actions without taking them, until you trust it
-   - `notify_targets` — where alerts go (e.g. your phone's `notify.*` service)
-   - `max_llm_calls_per_hour` / `max_llm_calls_per_day` — cost caps (defaults 30 / 250)
-3. Start it. `GET :8099/healthz` shows status, active goals, and live budget. Drive it with
-   `POST :8099/goal {"text": "...", "type": "watch" | "do"}`, or from the voice assistant.
+> **Full setup — options, the `/healthz` + `/goal` control surface, and the one manual step (a
+> routing instruction for your conversation agent) — lives in the [add-on setup guide](addon/README.md)**
+> (also shown on the add-on's Documentation tab in HA). That's the single source of truth for setup.
 
-The same image also runs as a plain Docker container for local development (set `HA_URL` +
-`HA_TOKEN` instead of the supervisor token).
-
-## Talk to it by voice (optional bridge)
-
-Make the Guardian reachable from Home Assistant's voice/chat assistant, so you can just *say*
-*"keep an eye on the house"* or *"make it look like someone's home"* and it routes to the agent.
-
-**On first run the add-on self-provisions the bridge** — it creates the `input_text` helper, the
-**"Ask Cooper"** script, and exposes that script to Assist. The Guardian then picks up whatever the
-script hands it and runs it (watch, schedule, presence sim, camera check, a direct task) and
-**notifies the result** back to your phone.
-
-The **one manual step** is a routing hint in your **conversation agent's instructions**: *"For
-anything needing watching, scheduling, presence simulation, camera vision, or multi-step work, call
-the 'Ask Cooper' script with the user's request as `goal`; handle simple control and direct
-questions yourself."* (Even without it, the agent will often call "Ask Cooper" on its own from the
-script's description — the hint just makes routing reliable.)
-
-Now the phone is a thin mic for the Guardian: simple commands resolve locally, everything agentic
-hands off to Cooper, which acts and reports back.
+It also runs as a plain Docker container for local development (`HA_URL` + `HA_TOKEN` instead of the
+supervisor token).
 
 ## Docs
 

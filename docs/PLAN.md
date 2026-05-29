@@ -4,6 +4,13 @@ Approach: build the **voice front-end and guardian agent in parallel**; autonomy
 **act on safe / confirm risky**; the guardian ships as a **Home Assistant add-on** (LAN-local,
 WAN-surviving, no separate host to maintain).
 
+> **Status:** both layers are live. Shipped since this plan was written: camera **vision**, a **cost
+> guard**, photo alerts with agent-chosen urgency, **time-boxed / presence-aware / standing**
+> watches, **deferred & arrival tasks**, **self-scheduled action sequences** (`schedule_actions`),
+> local-forecast weather, the **voice bridge** (talk to the guardian from the phone, self-
+> provisioned), and **ElevenLabs/TARS** TTS. See [the changelog](../addon/CHANGELOG.md). This file
+> is kept as the original plan + remaining roadmap.
+
 ## Phase 0 — Registry hygiene (HARD PREREQUISITE)
 
 An agent on a dirty entity registry hallucinates capabilities and mis-acts. (In early testing, an
@@ -25,13 +32,9 @@ So before anything else:
 
 1. Add HA **Anthropic Conversation** integration; set as the conversation agent with
    "prefer local intents, fall back to Claude." Test via the HA app (text + voice).
-2. **Web search — MANDATORY gate for adoption.** The phone assistant can't be switched off the
-   stock cloud assistant until Claude can answer live web queries. Add a `web_search` tool:
-   - *Route A (fast):* a `rest_command`/`script` calling a search API (Tavily / Brave) exposed to
-     the conversation agent.
-   - *Route B (best):* route Assist to a custom Claude backend with Anthropic's native `web_search`
-     server-tool (also unifies the brain with Track B's guardian agent).
-   Needs a dedicated search-API key.
+2. **Web search — DONE.** This was the gate for replacing a stock cloud assistant on a phone.
+   Resolved with Anthropic's **native `web_search`** server-tool, enabled directly on the HA
+   *Anthropic Conversation* integration — no third-party (Tavily/Brave) key needed.
 3. Tune Claude's system prompt: house context, personality, the curated live-entity surface.
 4. Curate intents/scripts for common commands (the fast path).
 5. *(optional, later)* voice satellite + "Cooper" wake word for hands-free.
