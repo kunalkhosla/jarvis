@@ -11,6 +11,7 @@ export interface Config {
   heartbeatSeconds: number;
   maxLlmCallsPerHour: number; // cost cap: auto evals paused past this (rolling hour)
   maxLlmCallsPerDay: number;  // cost cap: auto evals paused past this (rolling day)
+  briefingTime: string;       // local HH:MM for the daily morning briefing ("" = off)
   notifyTargets: string[];
   haBaseUrl: string; // REST base, e.g. http://supervisor/core/api
   haWsUrl: string;   // websocket, e.g. ws://supervisor/core/websocket
@@ -43,6 +44,7 @@ export function loadConfig(): Config {
     heartbeatSeconds: Number(opts.heartbeat_seconds ?? process.env.HEARTBEAT_SECONDS ?? 600),
     maxLlmCallsPerHour: Number(opts.max_llm_calls_per_hour ?? process.env.MAX_LLM_CALLS_PER_HOUR ?? 30),
     maxLlmCallsPerDay: Number(opts.max_llm_calls_per_day ?? process.env.MAX_LLM_CALLS_PER_DAY ?? 250),
+    briefingTime: get("briefing_time", "BRIEFING_TIME", ""),
     notifyTargets: (opts.notify_targets as string[]) ?? [],
     haBaseUrl,
     haWsUrl,

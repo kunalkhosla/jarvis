@@ -4,11 +4,11 @@ import { HaClient, EntityState } from "./ha.js";
 import { runGoal } from "./agent.js";
 import { Store, Goal } from "./store.js";
 import { Budget } from "./budget.js";
+import { C, L as log, header } from "./log.js";
 
 const cfg = loadConfig();
 const ha = new HaClient(cfg);
 const budget = new Budget(cfg.maxLlmCallsPerHour, cfg.maxLlmCallsPerDay);
-const log = (m: string) => console.log(`[cooper ${new Date().toISOString()}] ${m}`);
 
 // Durable store (SQLite). Watch-goals persist across restarts; do-goals are one-shot/in-memory.
 // `goals` is the hot-path in-memory cache, write-through to the store on every mutation.
@@ -17,7 +17,7 @@ const goals: Goal[] = store.watchGoals();
 let tmpId = -1; // transient ids for one-shot do-goals (never collide with SQLite rowids)
 const COOLDOWN_MS = 120_000; // min gap between evaluations of the same watch-goal
 
-log(`starting — model=${cfg.model}, observe=${cfg.observeMode}, search=${cfg.searchProvider}; ${goals.length} watch-goal(s) restored`);
+log(`${C.bold}${C.green}Cooper Guardian starting${C.reset} — model=${cfg.model}, observe=${cfg.observeMode}, caps=${cfg.maxLlmCallsPerHour}/hr ${cfg.maxLlmCallsPerDay}/day; ${goals.length} watch-goal(s) restored${cfg.briefingTime ? `; briefing @ ${cfg.briefingTime}` : ""}`);
 
 // ---- HTTP control surface: /healthz, POST /goal {text,type}, DELETE /goal/:id ----
 createServer(async (req, res) => {
@@ -78,10 +78,10 @@ ha.subscribe((entityId, st) => {
     const text = st.state.trim();
     const g = store.addGoal(text, Date.now(), Date.now()); // persisted watch-goal
     goals.push(g);
-    log(`📥 watch-goal from HA conversation: "${text}" (#${g.id})`);
+    header(`📥 watch-goal from HA conversation: "${text}" (#${g.id})`);
     store.logAction(g.created, g.id, "watch:create", `bridge: ${text}`);
     runGoal(cfg, ha, text, "(initial check — establish what's normal)", budget)
-      .then((r) => log(`   → ${r}`)).catch((e) => log(`   intake error: ${e}`));
+      .then((r) => log(`   ${C.green}→ ${r}${C.reset}`)).catch((e) => log(`   ${C.red}intake error: ${e}${C.reset}`));
     ha.callService("input_text", "set_value", { entity_id: WATCH_REQUEST, value: "" }).catch(() => {}); // clear for next time
     return;
   }
@@ -97,13 +97,13 @@ async function processBuffer() {
   const ctx = `Recent home events:\n${events.join("\n")}`;
   const now = Date.now();
   const gate = budget.canRun(now);
-  if (!gate.ok) { log(`💸 skip watch eval — ${gate.reason}`); return; } // cost cap: pause auto evals
+  if (!gate.ok) { log(`${C.yellow}💸 skip watch eval — ${gate.reason}${C.reset}`); return; } // cost cap: pause auto evals
   for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS)) {
     if (!budget.canRun(now).ok) break;
     g.lastRun = now; store.touchGoal(g.id, now);
-    log(`👁 watch eval goal #${g.id} (${events.length} events)`);
-    try { const r = await runGoal(cfg, ha, g.text, ctx, budget); store.logAction(now, g.id, "watch:eval", String(r).slice(0, 500)); log(`   → ${r}`); }
-    catch (e) { log(`   watch goal #${g.id} error: ${e}`); }
+    header(`👁 WATCH eval #${g.id} (${events.length} event(s))`);
+    try { const r = await runGoal(cfg, ha, g.text, ctx, budget); store.logAction(now, g.id, "watch:eval", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
+    catch (e) { log(`   ${C.red}watch goal #${g.id} error: ${e}${C.reset}`); }
   }
 }
 
@@ -111,9 +111,29 @@ async function processBuffer() {
 setInterval(async () => {
   const now = Date.now();
   for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS)) {
-    if (!budget.canRun(now).ok) { log(`💸 skip heartbeat — ${budget.canRun(now).reason}`); break; }
+    if (!budget.canRun(now).ok) { log(`${C.yellow}💸 skip heartbeat — ${budget.canRun(now).reason}${C.reset}`); break; }
     g.lastRun = now; store.touchGoal(g.id, now);
-    try { const r = await runGoal(cfg, ha, g.text, "(periodic check — no specific event)", budget); store.logAction(now, g.id, "watch:heartbeat", String(r).slice(0, 500)); log(`⏱ heartbeat goal #${g.id}: ${r}`); }
-    catch (e) { log(`heartbeat goal #${g.id} error: ${e}`); }
+    header(`⏱ HEARTBEAT eval #${g.id}`);
+    try { const r = await runGoal(cfg, ha, g.text, "(periodic check — no specific event)", budget); store.logAction(now, g.id, "watch:heartbeat", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
+    catch (e) { log(`   ${C.red}heartbeat goal #${g.id} error: ${e}${C.reset}`); }
   }
 }, Math.max(60, cfg.heartbeatSeconds) * 1000);
+
+// ---- Morning briefing: once a day at cfg.briefingTime (local HH:MM), a proactive do-goal ----
+const BRIEFING_GOAL =
+  "Morning briefing. In a few friendly sentences: today's weather (use web search), my calendar " +
+  "and when I should leave for the first event, anything notable from overnight home/camera/door " +
+  "events, and anything that needs attention (open doors, low batteries, offline devices). Then " +
+  "notify me with the summary. Be concise.";
+let lastBriefing = "";
+if (cfg.briefingTime) setInterval(async () => {
+  const d = new Date();
+  const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const today = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  if (hhmm !== cfg.briefingTime || lastBriefing === today) return;
+  lastBriefing = today;
+  if (!budget.canRun(Date.now()).ok) { log(`${C.yellow}💸 skip briefing — budget cap${C.reset}`); return; }
+  header(`📰 MORNING BRIEFING (${cfg.briefingTime})`);
+  try { const r = await runGoal(cfg, ha, BRIEFING_GOAL, "(scheduled morning briefing)", budget); store.logAction(Date.now(), null, "briefing", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
+  catch (e) { log(`   ${C.red}briefing error: ${e}${C.reset}`); }
+}, 60_000);
