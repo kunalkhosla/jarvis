@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.0
+- Voice bridge now forwards ANY request to Cooper, not just "watch" intents. Say something to the
+  phone assistant that needs scheduling, presence simulation, a camera check, or a multi-step task,
+  and it hands the full request to the guardian, which runs it and notifies the result back — the
+  phone becomes a thin mic for the guardian.
+
 ## 0.12.0
 - Cooper can now plan and run timed action SEQUENCES itself (new schedule_actions tool). Ask it to
   "make it look like someone's home" and it designs a believable, uneven on/off light schedule and

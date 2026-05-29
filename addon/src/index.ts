@@ -122,20 +122,32 @@ function interesting(entityId: string, st: EntityState): boolean {
 }
 
 const WATCH_REQUEST = "input_text.cooper_watch_request"; // bridge from the HA conversation agent
+const WATCH_INTENT = /\b(watch|keep an eye|monitor|guard|look after|alert me|notify me if|let me know if|keep watch)\b/i;
+const notifyAll = (msg: string) => { for (const tgt of cfg.notifyTargets) ha.notify(tgt, "Cooper", msg).catch(() => {}); };
 
 ha.subscribe((entityId, st) => {
-  // Bridge: phone/voice Cooper writes a watch request into this helper → register a watch-goal.
+  // Bridge: the phone/voice assistant forwards ANY request into this helper. Cooper runs it (watch,
+  // do, schedule, answer) and notifies the result back — the phone is a thin mic for the guardian.
   if (entityId === WATCH_REQUEST && st.state && st.state.trim()) {
     const text = st.state.trim();
     const tnow = Date.now();
-    const g = store.addGoal(text, tnow, tnow, parseExpiry(text, tnow), wantsPresenceStandDown(text), wantsStandingWhileAway(text)); // persisted watch-goal
-    goals.push(g);
-    header(`📥 watch-goal from HA conversation: "${text}" (#${g.id})${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.untilPresent ? " [until home]" : ""}${g.whileAway ? " [standing while-away]" : ""}`);
-    store.logAction(g.created, g.id, "watch:create", `bridge: ${text}`);
-    if (g.whileAway) checkPresenceStandDown(tnow).catch(() => {}); // dormant until everyone's out
-    else runGoal(cfg, ha, text, "(initial check — establish what's normal)", budget)
-      .then((r) => log(`   ${C.green}→ ${r}${C.reset}`)).catch((e) => log(`   ${C.red}intake error: ${e}${C.reset}`));
-    ha.callService("input_text", "set_value", { entity_id: WATCH_REQUEST, value: "" }).catch(() => {}); // clear for next time
+    ha.callService("input_text", "set_value", { entity_id: WATCH_REQUEST, value: "" }).catch(() => {}); // clear early
+    const isWatch = wantsStandingWhileAway(text) || wantsPresenceStandDown(text) || WATCH_INTENT.test(text);
+    if (isWatch) {
+      const g = store.addGoal(text, tnow, tnow, parseExpiry(text, tnow), wantsPresenceStandDown(text), wantsStandingWhileAway(text));
+      goals.push(g);
+      header(`📥 watch from phone: "${text}" (#${g.id})${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.untilPresent ? " [until home]" : ""}${g.whileAway ? " [standing while-away]" : ""}`);
+      store.logAction(g.created, g.id, "watch:create", `bridge: ${text}`);
+      if (g.whileAway) { checkPresenceStandDown(tnow).catch(() => {}); notifyAll(`Standing watch set: "${text}". I'll arm whenever everyone's out.`); }
+      else runGoal(cfg, ha, text, "(initial check — establish what's normal)", budget)
+        .then((r) => { log(`   ${C.green}→ ${r}${C.reset}`); notifyAll(r); }).catch((e) => log(`   ${C.red}intake error: ${e}${C.reset}`));
+    } else {
+      // Any non-watch request → run it now (control / schedule / answer) and report the result back.
+      header(`📥 request from phone: "${text}"`);
+      store.logAction(tnow, null, "bridge:do", text);
+      runGoal(cfg, ha, text, "(handed over from the voice assistant — handle it now; the summary is reported back to the user)", budget)
+        .then((r) => { log(`   ${C.green}→ ${r}${C.reset}`); notifyAll(r); }).catch((e) => log(`   ${C.red}bridge error: ${e}${C.reset}`));
+    }
     return;
   }
   // Presence change → fire arrival tasks + check away-watch stand-down (deterministic, no LLM).
