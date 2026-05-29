@@ -112,11 +112,14 @@ const WATCH_CLASSES = new Set(["motion", "door", "window", "occupancy", "presenc
 let buffer: string[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
 
+// Camera AI-detection sensors (person/vehicle/animal/package) often have NO device_class — match
+// them by name so the most meaningful events ("a person was detected") aren't ignored.
+const DETECT_NAME = /_(person|vehicle|animal|pet|package|face|baby|cry)\b/;
 function interesting(entityId: string, st: EntityState): boolean {
   const domain = entityId.split(".")[0];
   if (domain === "binary_sensor") {
     const dc = st.attributes?.device_class as string | undefined;
-    return dc ? WATCH_CLASSES.has(dc) : false;
+    return (dc ? WATCH_CLASSES.has(dc) : false) || DETECT_NAME.test(entityId);
   }
   return WATCH_DOMAINS.has(domain);
 }

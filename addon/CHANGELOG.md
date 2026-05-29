@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.1
+- Watch engine now reacts to camera AI-detection sensors (person/vehicle/animal/package) that
+  carry no device_class — previously only raw "_motion" sensors triggered it, so the more
+  meaningful "person detected" events from cameras were being ignored.
+
 ## 0.13.0
 - Voice bridge now forwards ANY request to Cooper, not just "watch" intents. Say something to the
   phone assistant that needs scheduling, presence simulation, a camera check, or a multi-step task,
