@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.1
+- **No more confirmation spam.** A risky action across many entities is now one `call_service` with an
+  `entity_id` list → a single Yes/No for the whole set, not one prompt per entity. A hard backstop also
+  refuses fanning out more than 3 pending prompts at once. (A "start every sprinkler zone" request had
+  produced a dozen separate prompts.)
+- **Timed runs use the right pattern.** System prompt now tells the agent that `turn_on` doesn't take a
+  duration param — to run something for N minutes, turn it on and `schedule_actions` the turn-off; for
+  sequential timed zones, schedule each on/off at cumulative offsets. Reversible/auto, zero prompts.
+
 ## 0.17.0
 - **A failing service call no longer aborts the whole eval.** `call_service` (and `notify`) errors are
   caught and fed back to the agent as a tool result, so a single bad call (e.g. a 400 on one sprinkler

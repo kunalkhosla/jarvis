@@ -136,6 +136,7 @@ const notifyAll = (msg: string) => { for (const tgt of cfg.notifyTargets) ha.not
 let paused = false; // mirrors PAUSE_SWITCH; updated from state_changed + read at boot
 const pendingConfirm = new Map<string, { domain: string; service: string; data: Record<string, unknown> }>();
 let confirmSeq = 1;
+const MAX_PENDING_CONFIRMS = 3; // never fan out more than this many Yes/No prompts at once (anti-spam)
 
 const confirmSig = (domain: string, service: string, data: Record<string, unknown>) =>
   `${domain}.${service}:${[data?.entity_id].flat().filter(Boolean).join(",")}`;
@@ -145,6 +146,9 @@ function requestConfirm(domain: string, service: string, data: Record<string, un
   const sig = confirmSig(domain, service, data);
   for (const p of pendingConfirm.values()) if (confirmSig(p.domain, p.service, p.data) === sig)
     return `Already asked the user to confirm ${human} — still waiting on their Yes/No. Don't ask again.`;
+  // Anti-spam: never blast the user with a pile of separate Yes/No prompts in one go.
+  if (pendingConfirm.size >= MAX_PENDING_CONFIRMS)
+    return `Too many actions already awaiting confirmation (${pendingConfirm.size}). NOT sending another prompt. Don't ask the user to approve many risky actions one-by-one — do the reversible parts automatically (for a timed run: turn the switch ON and use schedule_actions to turn it OFF later), or stop and ask once to confirm the batch as a whole.`;
   const id = `c${confirmSeq++}`;
   pendingConfirm.set(id, { domain, service, data });
   for (const tgt of cfg.notifyTargets)
