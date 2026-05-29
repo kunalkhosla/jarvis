@@ -26,6 +26,13 @@ export class HaClient {
 
   getStates = (): Promise<EntityState[]> => this.rest("/states");
 
+  /** HA's configured location/timezone (the ground truth for any location-based reasoning).
+   *  Cached — it doesn't change at runtime. */
+  private _config: Record<string, unknown> | null = null;
+  async config(): Promise<Record<string, unknown>> {
+    return (this._config ??= await this.rest("/config"));
+  }
+
   /** Household presence entities (person.*). */
   async persons(): Promise<EntityState[]> {
     return (await this.getStates()).filter((s) => s.entity_id.startsWith("person."));

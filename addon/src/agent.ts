@@ -37,6 +37,9 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
   bedrooms or anything disruptive. Reversible only; confirm anything risky. Needs observe_mode off
   to actually act.
 - You have built-in web search for live external facts. Use notify to alert the user. Call finish when done.
+- LOCATION: a "Home location" line is provided below — use ONLY that for anything geographic
+  (weather, sunrise, traffic, local search). NEVER infer location from device/network/entity/SSID
+  names (e.g. a street or Wi-Fi name like "...Dakota..." is NOT a place); they are not geography.
 - REPORT FAITHFULLY from tool results: if call_service returns "[observe]" the action was NOT
   performed (observe mode) — say you *would* do it, never claim you did. If it returns "DEFERRED",
   it needs the user's confirmation — say so, don't claim success.`;
@@ -83,10 +86,18 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
   let knownIds: Set<string> | null = null;
   const ensureIds = async () => (knownIds ??= new Set((await ha.getStates()).map((s) => s.entity_id)));
 
+  // Ground every eval in HA's REAL location so geographic reasoning never guesses from entity names.
+  let locationLine = "";
+  try {
+    const hc = await ha.config();
+    locationLine = `\n\nHome location: ${hc.location_name ?? "home"} — latitude ${hc.latitude}, longitude ${hc.longitude}, timezone ${hc.time_zone}. Use this for all geographic reasoning.`;
+  } catch { /* location optional */ }
+  const systemPrompt = SYSTEM + locationLine;
+
   header(`▶ GOAL  ${C.reset}${C.bold}${goal}${C.reset}  ${C.gray}(observe=${cfg.observeMode}, model=${cfg.model})`);
   for (let step = 0; step < 12; step++) {
     const res = await anthropic.messages.create({
-      model: cfg.model, max_tokens: 1024, system: SYSTEM,
+      model: cfg.model, max_tokens: 1024, system: systemPrompt,
       tools: [...TOOLS, WEB_SEARCH] as Anthropic.MessageCreateParams["tools"], messages,
     });
     budget?.recordCall(Date.now(), res.usage);

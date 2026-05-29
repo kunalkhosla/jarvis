@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.4
+- Fix: location reasoning (weather, etc.) is now grounded in HA's real configured location
+  (lat/lon/timezone), injected into every eval. Previously, with no location, the model could
+  guess a place from entity/SSID names (e.g. a "...Dakota..." network name → wrong county/state).
+  System prompt also forbids inferring geography from device names.
+
 ## 0.11.3
 - Logs: reasoning (💭) lines now use magenta — HA's log viewer doesn't render the 256-color violet
   from 0.11.2 (it showed plain). Basic ANSI renders reliably.
