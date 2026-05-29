@@ -67,9 +67,17 @@ export function parseTrigger(text: string, now: number = Date.now()): { runAt: n
   return { runAt, onArrival };
 }
 
-/** Does this goal want to stand down when the household returns home? (away/vacation watches) */
+/** A STANDING away-watch — recurring: arms whenever everyone leaves, disarms when home, kept
+ *  forever. e.g. "keep an eye whenever we're out", "always watch when we're away". */
+export function wantsStandingWhileAway(text: string): boolean {
+  const t = text.toLowerCase();
+  return /\b(whenever|any\s?time|always|every time|each time)\b/.test(t) && /\b(out|away|gone|not home|leave|left)\b/.test(t);
+}
+
+/** A one-shot away-watch — stand down (and delete) when the household returns home this time. */
 export function wantsPresenceStandDown(text: string): boolean {
   const t = text.toLowerCase();
+  if (wantsStandingWhileAway(t)) return false; // standing watches own their own lifecycle
   return /\b(while|when|until|till|til)\b[^.]*\b(out|away|gone|back|home|return|returning|leave|leaving)\b/.test(t)
     || /\b(while away|while out|on vacation|on holiday|out of town|out of the house|until we'?re back|when we get home|when we'?re back)\b/.test(t);
 }

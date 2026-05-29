@@ -5,7 +5,7 @@ import { runGoal } from "./agent.js";
 import { Store, Goal, Task } from "./store.js";
 import { Budget } from "./budget.js";
 import { C, L as log, header } from "./log.js";
-import { parseExpiry, wantsPresenceStandDown, parseTrigger } from "./time.js";
+import { parseExpiry, wantsPresenceStandDown, wantsStandingWhileAway, parseTrigger } from "./time.js";
 
 const cfg = loadConfig();
 const ha = new HaClient(cfg);
@@ -17,6 +17,7 @@ const store = new Store();
 const goals: Goal[] = store.watchGoals();
 const tasks: Task[] = store.tasks(); // deferred do-goals (scheduled / arrival-triggered)
 const firing = new Set<number>();    // task ids mid-fire, to avoid double-firing
+const armed = new Map<number, boolean>(); // whileAway goal id -> currently armed (everyone out)?
 let tmpId = -1; // transient ids for one-shot do-goals (never collide with SQLite rowids)
 const COOLDOWN_MS = 120_000; // min gap between evaluations of the same watch-goal
 
@@ -28,7 +29,7 @@ createServer(async (req, res) => {
   if (req.url === "/healthz")
     return json(200, {
       ok: true, observe: cfg.observeMode, budget: budget.stats(Date.now()),
-      goals: goals.map((g) => ({ id: g.id, type: g.type, text: g.text, expires: g.expires ? new Date(g.expires).toISOString() : null, untilHome: g.untilPresent || undefined })),
+      goals: goals.map((g) => ({ id: g.id, type: g.type, text: g.text, expires: g.expires ? new Date(g.expires).toISOString() : null, untilHome: g.untilPresent || undefined, standing: g.whileAway || undefined, armed: g.whileAway ? (armed.get(g.id) || false) : undefined })),
       tasks: tasks.map((t) => ({ id: t.id, text: t.text, runAt: t.runAt ? new Date(t.runAt).toISOString() : null, onArrival: t.onArrival })),
     });
   if (req.method === "POST" && req.url === "/goal") {
@@ -56,10 +57,17 @@ createServer(async (req, res) => {
     // expires accepts epoch ms or ISO/parseable string; if absent, infer from the goal text
     // ("...until Monday evening", "...for 2 hours"). null = open-ended.
     const expMs = expires == null ? parseExpiry(text, now) : (typeof expires === "number" ? expires : Date.parse(expires) || null);
+    const standing = wantsStandingWhileAway(text);
     const g: Goal = isWatch
-      ? store.addGoal(text, now, 0, expMs, wantsPresenceStandDown(text)) // persisted (gets a real rowid)
-      : { id: tmpId--, text, type: "do", created: now, lastRun: 0, expires: null, untilPresent: false, sawAway: false }; // transient one-shot
+      ? store.addGoal(text, now, 0, expMs, wantsPresenceStandDown(text), standing) // persisted (gets a real rowid)
+      : { id: tmpId--, text, type: "do", created: now, lastRun: 0, expires: null, untilPresent: false, sawAway: false, whileAway: false }; // transient one-shot
     goals.push(g);
+    if (standing) { // dormant until everyone's out; checkPresence arms it
+      header(`🏡 standing while-away watch registered (#${g.id}): "${text}"`);
+      store.logAction(now, g.id, "watch:create", `standing while-away: ${text}`);
+      await checkPresenceStandDown(now);
+      return json(200, { id: g.id, type: "watch", standing: true, armed: armed.get(g.id) || false });
+    }
     try {
       const result = await runGoal(cfg, ha, text, isWatch ? "(initial check — establish what's normal)" : "", budget);
       g.lastRun = Date.now();
@@ -109,11 +117,12 @@ ha.subscribe((entityId, st) => {
   if (entityId === WATCH_REQUEST && st.state && st.state.trim()) {
     const text = st.state.trim();
     const tnow = Date.now();
-    const g = store.addGoal(text, tnow, tnow, parseExpiry(text, tnow), wantsPresenceStandDown(text)); // persisted watch-goal
+    const g = store.addGoal(text, tnow, tnow, parseExpiry(text, tnow), wantsPresenceStandDown(text), wantsStandingWhileAway(text)); // persisted watch-goal
     goals.push(g);
-    header(`📥 watch-goal from HA conversation: "${text}" (#${g.id})${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.untilPresent ? " [until home]" : ""}`);
+    header(`📥 watch-goal from HA conversation: "${text}" (#${g.id})${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.untilPresent ? " [until home]" : ""}${g.whileAway ? " [standing while-away]" : ""}`);
     store.logAction(g.created, g.id, "watch:create", `bridge: ${text}`);
-    runGoal(cfg, ha, text, "(initial check — establish what's normal)", budget)
+    if (g.whileAway) checkPresenceStandDown(tnow).catch(() => {}); // dormant until everyone's out
+    else runGoal(cfg, ha, text, "(initial check — establish what's normal)", budget)
       .then((r) => log(`   ${C.green}→ ${r}${C.reset}`)).catch((e) => log(`   ${C.red}intake error: ${e}${C.reset}`));
     ha.callService("input_text", "set_value", { entity_id: WATCH_REQUEST, value: "" }).catch(() => {}); // clear for next time
     return;
@@ -147,15 +156,34 @@ function reapExpired(now: number) {
 // Away-watches stand down once everyone is home again — but only after someone has actually been
 // away (so arming it while everyone's home doesn't instantly cancel). Time cap is the fallback.
 async function checkPresenceStandDown(now: number) {
-  const pg = goals.filter((g) => g.untilPresent);
+  const pg = goals.filter((g) => g.untilPresent || g.whileAway);
   if (!pg.length) return;
   const persons = await ha.persons();
   if (!persons.length) return; // no presence entities → rely on the time cap
   const anyAway = persons.some((p) => p.state !== "home");
   const allHome = persons.every((p) => p.state === "home");
   for (const g of pg) {
-    if (anyAway && !g.sawAway) { g.sawAway = true; store.setSawAway(g.id); log(`${C.gray}#${g.id}: occupants away — presence stand-down armed${C.reset}`); }
-    if (g.sawAway && allHome) standDown(g, now, "watch:home", `Welcome home — standing down from "${g.text}".`);
+    // One-shot away-watch: stand down (delete) when everyone's home, once someone's been away.
+    if (g.untilPresent) {
+      if (anyAway && !g.sawAway) { g.sawAway = true; store.setSawAway(g.id); log(`${C.gray}#${g.id}: occupants away — presence stand-down armed${C.reset}`); }
+      if (g.sawAway && allHome) standDown(g, now, "watch:home", `Welcome home — standing down from "${g.text}".`);
+    }
+    // Standing while-away watch: arm when everyone's out, disarm (but keep) when someone returns.
+    if (g.whileAway) {
+      const isArmed = armed.get(g.id) ?? false;
+      if (!isArmed && !allHome && anyAway) {
+        armed.set(g.id, true);
+        header(`🛡 ARMED standing watch #${g.id} — everyone's out: "${g.text}"`);
+        store.logAction(now, g.id, "watch:armed", g.text);
+        if (budget.canRun(now).ok) runGoal(cfg, ha, g.text, "(now arming — everyone is out; establish what's normal)", budget)
+          .then((r) => log(`   ${C.green}→ ${r}${C.reset}`)).catch(() => {});
+      } else if (isArmed && allHome) {
+        armed.set(g.id, false);
+        log(`${C.yellow}🏠 disarmed standing watch #${g.id} — someone's home${C.reset}`);
+        store.logAction(now, g.id, "watch:disarmed", g.text);
+        for (const tgt of cfg.notifyTargets) ha.notify(tgt, "Cooper", `Welcome home — I'll stop watching and re-arm next time you're all out.`).catch(() => {});
+      }
+    }
   }
 }
 
@@ -174,6 +202,7 @@ async function fireTask(tk: Task, now: number, reason: string) {
 const fireDueTimeTasks = (now: number) => { for (const tk of tasks.filter((t) => t.runAt && now >= t.runAt)) fireTask(tk, now, "scheduled time"); };
 const fireArrivalTasks = (now: number) => { for (const tk of tasks.filter((t) => t.onArrival)) fireTask(tk, now, "arrived home"); };
 setInterval(() => fireDueTimeTasks(Date.now()), 30_000); // catches scheduled + any missed during downtime
+setTimeout(() => checkPresenceStandDown(Date.now()).catch(() => {}), 3000); // arm standing watches if already out
 
 async function processBuffer() {
   const events = buffer; buffer = []; timer = null;
@@ -182,7 +211,7 @@ async function processBuffer() {
   const ctx = `Recent home events:\n${events.join("\n")}`;
   const gate = budget.canRun(now);
   if (!gate.ok) { log(`${C.yellow}💸 skip watch eval — ${gate.reason}${C.reset}`); return; } // cost cap: pause auto evals
-  for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS)) {
+  for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS && (!x.whileAway || armed.get(x.id)))) {
     if (!budget.canRun(now).ok) break;
     g.lastRun = now; store.touchGoal(g.id, now);
     header(`👁 WATCH eval #${g.id} (${events.length} event(s))`);
@@ -195,7 +224,7 @@ async function processBuffer() {
 setInterval(async () => {
   const now = Date.now();
   reapExpired(now); await checkPresenceStandDown(now);
-  for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS)) {
+  for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS && (!x.whileAway || armed.get(x.id)))) {
     if (!budget.canRun(now).ok) { log(`${C.yellow}💸 skip heartbeat — ${budget.canRun(now).reason}${C.reset}`); break; }
     g.lastRun = now; store.touchGoal(g.id, now);
     header(`⏱ HEARTBEAT eval #${g.id}`);

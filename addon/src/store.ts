@@ -9,8 +9,9 @@ export interface Goal {
   created: number;
   lastRun: number;
   expires: number | null;   // epoch ms after which the goal auto-stands-down; null = open-ended
-  untilPresent: boolean;    // away-watch: stand down when everyone is home again
+  untilPresent: boolean;    // one-shot away-watch: stand down (delete) when everyone is home again
   sawAway: boolean;         // has anyone been away since this goal started? (gates untilPresent)
+  whileAway: boolean;       // STANDING watch: auto-arms when everyone's out, disarms when home (kept)
 }
 
 /** A deferred do-goal: a one-shot task that fires on a trigger (a scheduled time and/or when
@@ -48,7 +49,8 @@ export class Store {
         last_run INTEGER NOT NULL DEFAULT 0,
         expires  INTEGER,
         until_present INTEGER NOT NULL DEFAULT 0,
-        saw_away INTEGER NOT NULL DEFAULT 0
+        saw_away INTEGER NOT NULL DEFAULT 0,
+        while_away INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS action_log (
         id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,26 +68,26 @@ export class Store {
       );
     `);
     // Migrate older DBs that predate later columns (ignore if already present).
-    for (const col of ["expires INTEGER", "until_present INTEGER NOT NULL DEFAULT 0", "saw_away INTEGER NOT NULL DEFAULT 0"])
+    for (const col of ["expires INTEGER", "until_present INTEGER NOT NULL DEFAULT 0", "saw_away INTEGER NOT NULL DEFAULT 0", "while_away INTEGER NOT NULL DEFAULT 0"])
       try { this.db.exec(`ALTER TABLE goals ADD COLUMN ${col}`); } catch { /* already present */ }
   }
 
   /** All persisted (watch) goals, oldest first — loaded into memory at boot. */
   watchGoals(): Goal[] {
     const rows = this.db
-      .prepare("SELECT id, text, type, created, last_run AS lastRun, expires, until_present, saw_away FROM goals ORDER BY id")
-      .all() as Array<{ id: number; text: string; type: "watch" | "do"; created: number; lastRun: number; expires: number | null; until_present: number; saw_away: number }>;
+      .prepare("SELECT id, text, type, created, last_run AS lastRun, expires, until_present, saw_away, while_away FROM goals ORDER BY id")
+      .all() as Array<{ id: number; text: string; type: "watch" | "do"; created: number; lastRun: number; expires: number | null; until_present: number; saw_away: number; while_away: number }>;
     return rows.map((r) => ({
       id: r.id, text: r.text, type: r.type, created: r.created, lastRun: r.lastRun,
-      expires: r.expires, untilPresent: !!r.until_present, sawAway: !!r.saw_away,
+      expires: r.expires, untilPresent: !!r.until_present, sawAway: !!r.saw_away, whileAway: !!r.while_away,
     }));
   }
 
-  addGoal(text: string, created: number, lastRun: number, expires: number | null = null, untilPresent = false): Goal {
+  addGoal(text: string, created: number, lastRun: number, expires: number | null = null, untilPresent = false, whileAway = false): Goal {
     const info = this.db
-      .prepare("INSERT INTO goals (text, type, created, last_run, expires, until_present) VALUES (?, 'watch', ?, ?, ?, ?)")
-      .run(text, created, lastRun, expires, untilPresent ? 1 : 0);
-    return { id: Number(info.lastInsertRowid), text, type: "watch", created, lastRun, expires, untilPresent, sawAway: false };
+      .prepare("INSERT INTO goals (text, type, created, last_run, expires, until_present, while_away) VALUES (?, 'watch', ?, ?, ?, ?, ?)")
+      .run(text, created, lastRun, expires, untilPresent ? 1 : 0, whileAway ? 1 : 0);
+    return { id: Number(info.lastInsertRowid), text, type: "watch", created, lastRun, expires, untilPresent, sawAway: false, whileAway };
   }
 
   touchGoal(id: number, lastRun: number): void {
