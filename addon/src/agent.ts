@@ -3,6 +3,8 @@ import type { Config } from "./config.js";
 import type { HaClient } from "./ha.js";
 import { tierFor } from "./guardrails.js";
 
+const L = (m: string) => console.log(`[jarvis ${new Date().toISOString()}] ${m}`);
+
 const SYSTEM = `You are Jarvis, a home agent for a Home Assistant smart home.
 You are given a GOAL and live home state. Reason about what (if anything) to do RIGHT NOW.
 - Use get_live_context to read state before acting or answering.
@@ -55,17 +57,20 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string): Promise<
   const log: string[] = [];
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: `GOAL: ${goal}` }];
 
+  L(`▶ goal: ${goal}  (observe=${cfg.observeMode}, model=${cfg.model})`);
   for (let step = 0; step < 12; step++) {
     const res = await anthropic.messages.create({ model: cfg.model, max_tokens: 1024, system: SYSTEM, tools: TOOLS, messages });
     messages.push({ role: "assistant", content: res.content });
+    for (const c of res.content) if (c.type === "text" && c.text.trim()) L(`  think: ${c.text.trim().slice(0, 240)}`);
     const toolUses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === "tool_use");
+    L(`  step ${step}: ${toolUses.length} tool call(s) [stop_reason=${res.stop_reason}]`);
     if (toolUses.length === 0) break;
 
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const t of toolUses) {
       const a = t.input as any;
       let out = "";
-      if (t.name === "finish") return a.summary;
+      if (t.name === "finish") { L(`✔ finish: ${a.summary}`); return a.summary; }
       else if (t.name === "get_live_context") {
         const ents = await ha.liveContext(a.domains);
         const compact = ents.map((e) => {
@@ -76,23 +81,25 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string): Promise<
           return o;
         });
         out = JSON.stringify(compact).slice(0, 30000);
+        L(`    🔍 get_live_context(${(a.domains ?? ["all"]).join(",")}) -> ${compact.length} entities`);
       }
-      else if (t.name === "web_search") out = await webSearch(cfg, a.query);
+      else if (t.name === "web_search") { L(`    🌐 web_search: ${a.query}`); out = await webSearch(cfg, a.query); }
       else if (t.name === "notify") {
         if (cfg.observeMode) { out = "[observe] would notify: " + a.message; }
         else { for (const tgt of cfg.notifyTargets) await ha.notify(tgt, "Jarvis", a.message); out = "notified"; }
-        log.push(out);
+        L(`    📲 notify -> ${out}`); log.push(out);
       } else if (t.name === "call_service") {
         const tier = tierFor(a.domain, a.service);
         if (tier === "never") out = "REFUSED (forbidden action)";
         else if (tier === "confirm") out = `DEFERRED for user confirmation: ${a.domain}.${a.service} (${a.reason})`;
         else if (cfg.observeMode) out = `[observe] would call ${a.domain}.${a.service} ${JSON.stringify(a.data ?? {})}`;
         else { await ha.callService(a.domain, a.service, a.data ?? {}); out = "done"; }
-        log.push(`${a.domain}.${a.service} [${tier}] -> ${out}`);
+        L(`    ⚙ call_service ${a.domain}.${a.service} [${tier}] -> ${out}`); log.push(`${a.domain}.${a.service} [${tier}] -> ${out}`);
       }
       results.push({ type: "tool_result", tool_use_id: t.id, content: out });
     }
     messages.push({ role: "user", content: results });
   }
+  L(`■ stopped (max steps)`);
   return "stopped (max steps). actions:\n" + log.join("\n");
 }
