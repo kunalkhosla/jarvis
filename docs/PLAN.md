@@ -36,10 +36,15 @@ So before anything else:
 4. Curate intents/scripts for common commands (the fast path).
 5. *(optional, later)* voice satellite + "Jarvis" wake word for hands-free.
 
-## Track B — Guardian agent (service)
+## Track B — Guardian agent (containerized; HA add-on now → standalone on home server later)
 
-1. **Core skeleton** — repo + Docker; goal registry; Claude tool-use loop with HA tools; SQLite;
-   the tiered guardrail framework; `/healthz`; **observe-mode default**.
+Packaged as a Docker container with an HA add-on wrapper (`config.yaml` + `Dockerfile`). Runs as
+an **add-on on the HA box** interim (LAN-local, WAN-surviving, no separate host); the **same
+image** moves to a standalone container on the home server later.
+
+1. **Core skeleton** — add-on scaffold (`config.yaml`, `Dockerfile`) + agent: goal registry;
+   Claude tool-use loop with HA tools (via supervisor token on localhost); SQLite; the tiered
+   guardrail framework; `/healthz`; **observe-mode default**.
 2. **Vertical slice — pool "do-goal"** — interpret "clean the pool" → find the pool pump → run a
    cleaning cycle → **verify** → report. Proves the whole chain end-to-end.
 3. **Watch loop — "keep an eye"** — WS event subscription + heartbeat, baseline capture, anomaly

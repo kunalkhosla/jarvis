@@ -132,9 +132,10 @@ flowchart TB
     HOME --> ANTH
 ```
 
-**Production** is a **LAN-local home server** (low latency to HA, no internet dependency for local
-control — important, since a guardian on a remote host is blind during WAN outages). A **cloud VPS**
-reaching HA via its **cloud remote API** is fine for interim development.
+**Interim:** ship the container as an **HA add-on** (runs on the HA box — LAN-local, survives WAN
+outages, no separate host needed). **Production:** run the **same image** as a standalone Docker
+container on a **LAN-local home server** when available. (A remote cloud VPS is a poor fit for a
+guardian — it's blind to the home during WAN outages.)
 
 ## Where the agent runs (hosting placement)
 
@@ -165,16 +166,17 @@ flowchart TB
 | Iteration / CI-CD speed | fast (own pipeline) | slower (build/install) | slowest, risky |
 | Needs a separate always-on host | yes | no | no |
 
-**Recommendation: A — standalone service on a LAN-local host.** HA stays a stable,
-backup-critical appliance; the agent gets an independent lifecycle (fast iteration, easy
-rollback, its own CI/CD); and co-locating on the same LAN gives ~all the latency/offline benefits
-of "inside HA" without the coupling.
+**Recommendation: containerize it, run as a HA add-on now → portable standalone container later.**
+The agent is a Docker container either way. As an **HA add-on** (Option B — an *isolated* container
+managed by HA's supervisor, **not** code inside HA's process) it runs on the HA box today:
+**LAN-local and surviving WAN outages from day one**, with no separate host required. The **same
+image** later runs as a **standalone Docker container** on a dedicated LAN host (Option A) when one
+is available. One codebase → interim simplicity of B, long-term independence of A.
 
-- Choose **B (add-on)** only if there's *no* separate always-on LAN host — it's the acceptable
-  "inside HA" form: an isolated container that just happens to be hosted by HA's supervisor.
-  (AppDaemon is a similar middle ground.)
 - **Avoid C (custom integration / in-process).** A long-running LLM agent with a bug or memory
-  leak would take the whole smart home down with it.
+  leak would take the whole smart home down with it; an isolated add-on container does not have
+  this risk. (AppDaemon is a similar middle ground to B, but a plain add-on container is more
+  portable.)
 
 ## Tech stack
 
