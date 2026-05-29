@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.1
+- Fix: a malformed POST body crashed the whole add-on (unhandled JSON parse → process exit →
+  supervisor restart). Now returns `400 invalid JSON`; the request handler and process are guarded
+  so no input can take Cooper down. (Found via adversarial testing.)
+
 ## 0.11.0
 - Standing "while away" watch: "keep an eye whenever we're out" arms automatically when everyone
   leaves and stands down when someone's home — set once, re-arms every time (distinct from the

@@ -26,6 +26,7 @@ log(`${C.bold}${C.green}Cooper Guardian starting${C.reset} — model=${cfg.model
 // ---- HTTP control surface: /healthz, POST /goal {text,type}, DELETE /goal/:id ----
 createServer(async (req, res) => {
   const json = (code: number, body: unknown) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)); };
+  try {
   if (req.url === "/healthz")
     return json(200, {
       ok: true, observe: cfg.observeMode, budget: budget.stats(Date.now()),
@@ -34,8 +35,10 @@ createServer(async (req, res) => {
     });
   if (req.method === "POST" && req.url === "/goal") {
     let raw = ""; for await (const c of req) raw += c;
-    const { text, type, expires, run_at, on_arrival } = JSON.parse(raw || "{}");
-    if (!text) return json(400, { error: "text required" });
+    let body: any;
+    try { body = JSON.parse(raw || "{}"); } catch { return json(400, { error: "invalid JSON" }); }
+    const { text, type, expires, run_at, on_arrival } = body;
+    if (!text || typeof text !== "string") return json(400, { error: "text (string) required" });
     const isWatch = type === "watch";
     const now = Date.now();
 
@@ -93,7 +96,15 @@ createServer(async (req, res) => {
     return json(200, { deleted: id });
   }
   json(404, { error: "not found" });
+  } catch (e) { // backstop: no request may ever crash the process
+    log(`${C.red}request error: ${e}${C.reset}`);
+    try { json(500, { error: "internal error" }); } catch { /* headers already sent */ }
+  }
 }).listen(8099, () => log("http on :8099"));
+
+// Last-resort guards so a stray rejection/throw can never take the add-on down.
+process.on("unhandledRejection", (e) => log(`${C.red}unhandledRejection: ${e}${C.reset}`));
+process.on("uncaughtException", (e) => log(`${C.red}uncaughtException: ${e}${C.reset}`));
 
 // ---- Watch engine: react to RELEVANT home events (filtered + debounced + cooldown) ----
 const WATCH_DOMAINS = new Set(["binary_sensor", "lock", "cover", "alarm_control_panel", "person"]);
