@@ -8,6 +8,7 @@ export interface Goal {
   type: "watch" | "do";
   created: number;
   lastRun: number;
+  expires: number | null; // epoch ms after which the goal auto-stands-down; null = open-ended
 }
 
 /** Where the DB lives. As an HA add-on, /data is the persisted volume; standalone falls back
@@ -32,7 +33,8 @@ export class Store {
         text     TEXT NOT NULL,
         type     TEXT NOT NULL CHECK (type IN ('watch','do')),
         created  INTEGER NOT NULL,
-        last_run INTEGER NOT NULL DEFAULT 0
+        last_run INTEGER NOT NULL DEFAULT 0,
+        expires  INTEGER
       );
       CREATE TABLE IF NOT EXISTS action_log (
         id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,20 +44,22 @@ export class Store {
         detail  TEXT
       );
     `);
+    // Migrate older DBs that predate the expires column.
+    try { this.db.exec("ALTER TABLE goals ADD COLUMN expires INTEGER"); } catch { /* already present */ }
   }
 
   /** All persisted (watch) goals, oldest first — loaded into memory at boot. */
   watchGoals(): Goal[] {
     return this.db
-      .prepare("SELECT id, text, type, created, last_run AS lastRun FROM goals ORDER BY id")
+      .prepare("SELECT id, text, type, created, last_run AS lastRun, expires FROM goals ORDER BY id")
       .all() as Goal[];
   }
 
-  addGoal(text: string, created: number, lastRun: number): Goal {
+  addGoal(text: string, created: number, lastRun: number, expires: number | null = null): Goal {
     const info = this.db
-      .prepare("INSERT INTO goals (text, type, created, last_run) VALUES (?, 'watch', ?, ?)")
-      .run(text, created, lastRun);
-    return { id: Number(info.lastInsertRowid), text, type: "watch", created, lastRun };
+      .prepare("INSERT INTO goals (text, type, created, last_run, expires) VALUES (?, 'watch', ?, ?, ?)")
+      .run(text, created, lastRun, expires);
+    return { id: Number(info.lastInsertRowid), text, type: "watch", created, lastRun, expires };
   }
 
   touchGoal(id: number, lastRun: number): void {

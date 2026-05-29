@@ -5,6 +5,7 @@ import { runGoal } from "./agent.js";
 import { Store, Goal } from "./store.js";
 import { Budget } from "./budget.js";
 import { C, L as log, header } from "./log.js";
+import { parseExpiry } from "./time.js";
 
 const cfg = loadConfig();
 const ha = new HaClient(cfg);
@@ -23,16 +24,19 @@ log(`${C.bold}${C.green}Cooper Guardian starting${C.reset} — model=${cfg.model
 createServer(async (req, res) => {
   const json = (code: number, body: unknown) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)); };
   if (req.url === "/healthz")
-    return json(200, { ok: true, observe: cfg.observeMode, budget: budget.stats(Date.now()), goals: goals.map((g) => ({ id: g.id, type: g.type, text: g.text })) });
+    return json(200, { ok: true, observe: cfg.observeMode, budget: budget.stats(Date.now()), goals: goals.map((g) => ({ id: g.id, type: g.type, text: g.text, expires: g.expires ? new Date(g.expires).toISOString() : null })) });
   if (req.method === "POST" && req.url === "/goal") {
     let raw = ""; for await (const c of req) raw += c;
-    const { text, type } = JSON.parse(raw || "{}");
+    const { text, type, expires } = JSON.parse(raw || "{}");
     if (!text) return json(400, { error: "text required" });
     const isWatch = type === "watch";
     const now = Date.now();
+    // expires accepts epoch ms or ISO/parseable string; if absent, infer from the goal text
+    // ("...until Monday evening", "...for 2 hours"). null = open-ended.
+    const expMs = expires == null ? parseExpiry(text, now) : (typeof expires === "number" ? expires : Date.parse(expires) || null);
     const g: Goal = isWatch
-      ? store.addGoal(text, now, 0) // persisted (gets a real rowid)
-      : { id: tmpId--, text, type: "do", created: now, lastRun: 0 }; // transient one-shot
+      ? store.addGoal(text, now, 0, expMs) // persisted (gets a real rowid)
+      : { id: tmpId--, text, type: "do", created: now, lastRun: 0, expires: null }; // transient one-shot
     goals.push(g);
     try {
       const result = await runGoal(cfg, ha, text, isWatch ? "(initial check — establish what's normal)" : "", budget);
@@ -76,9 +80,10 @@ ha.subscribe((entityId, st) => {
   // Bridge: phone/voice Cooper writes a watch request into this helper → register a watch-goal.
   if (entityId === WATCH_REQUEST && st.state && st.state.trim()) {
     const text = st.state.trim();
-    const g = store.addGoal(text, Date.now(), Date.now()); // persisted watch-goal
+    const tnow = Date.now();
+    const g = store.addGoal(text, tnow, tnow, parseExpiry(text, tnow)); // persisted watch-goal
     goals.push(g);
-    header(`📥 watch-goal from HA conversation: "${text}" (#${g.id})`);
+    header(`📥 watch-goal from HA conversation: "${text}" (#${g.id})${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}`);
     store.logAction(g.created, g.id, "watch:create", `bridge: ${text}`);
     runGoal(cfg, ha, text, "(initial check — establish what's normal)", budget)
       .then((r) => log(`   ${C.green}→ ${r}${C.reset}`)).catch((e) => log(`   ${C.red}intake error: ${e}${C.reset}`));
@@ -92,10 +97,21 @@ ha.subscribe((entityId, st) => {
   timer = setTimeout(processBuffer, 3000); // debounce: settle 3s after the last event
 });
 
+// Stand down any time-boxed goals whose window has passed (e.g. "watch until Monday evening").
+function reapExpired(now: number) {
+  for (const g of goals.filter((x) => x.expires && now >= x.expires)) {
+    goals.splice(goals.indexOf(g), 1); store.deleteGoal(g.id);
+    store.logAction(now, g.id, "watch:expired", g.text);
+    log(`${C.yellow}🕛 stood down expired goal #${g.id}: "${g.text}"${C.reset}`);
+    for (const tgt of cfg.notifyTargets) ha.notify(tgt, "Cooper", `Done watching: "${g.text}" — the window ended, standing down.`).catch(() => {});
+  }
+}
+
 async function processBuffer() {
   const events = buffer; buffer = []; timer = null;
-  const ctx = `Recent home events:\n${events.join("\n")}`;
   const now = Date.now();
+  reapExpired(now);
+  const ctx = `Recent home events:\n${events.join("\n")}`;
   const gate = budget.canRun(now);
   if (!gate.ok) { log(`${C.yellow}💸 skip watch eval — ${gate.reason}${C.reset}`); return; } // cost cap: pause auto evals
   for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS)) {
@@ -110,6 +126,7 @@ async function processBuffer() {
 // ---- Heartbeat: periodic safety re-check of watch-goals (in case events were missed) ----
 setInterval(async () => {
   const now = Date.now();
+  reapExpired(now);
   for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS)) {
     if (!budget.canRun(now).ok) { log(`${C.yellow}💸 skip heartbeat — ${budget.canRun(now).reason}${C.reset}`); break; }
     g.lastRun = now; store.touchGoal(g.id, now);
