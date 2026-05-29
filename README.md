@@ -64,7 +64,7 @@ Cooper is the **judgment layer** on top.
 ```mermaid
 flowchart TB
     subgraph user[" "]
-      V["🎙 Voice — wake word 'Cooper'"]
+      V["🎙 Voice (wake word)"]
       C["💬 Chat / HA app"]
     end
 
@@ -79,7 +79,7 @@ flowchart TB
         LOOP["Goal loop<br/>reason → see → act → verify"]
         GUARD["Guardrails<br/>auto / confirm / never"]
         BUDGET["Cost guard<br/>per-hour / per-day caps"]
-        DB[("SQLite<br/>goals · log")]
+        DB[("SQLite<br/>goals · tasks · log")]
       end
     end
 
@@ -93,6 +93,7 @@ flowchart TB
     INTENT -->|complex| CONV
     CONV --> CLAUDE
     CONV --> API
+    CONV -.->|hands off agentic requests<br/>(bridge)| LOOP
 
     LOOP <-->|state · events · camera snapshots| API
     LOOP -->|reason + vision| CLAUDE
@@ -111,6 +112,10 @@ Two cooperating layers, both inside Home Assistant:
 2. **Cooper Guardian add-on** — the novel core: a persistent, goal-driven Claude agent that
    watches (with **vision**) and acts with **judgment**, gated by **guardrails** and a **cost
    guard**, with **SQLite** persistence. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+A lightweight **bridge** links them: the front-end forwards anything agentic (watching, scheduling,
+presence simulation, camera checks) to the Guardian, which acts and notifies the result — so the
+voice assistant becomes a thin mic for the Guardian's full toolset.
 
 ## Install
 
@@ -132,17 +137,18 @@ The same image also runs as a plain Docker container for local development (set 
 ## Talk to it by voice (optional bridge)
 
 Make the Guardian reachable from Home Assistant's voice/chat assistant, so you can just *say*
-*"keep an eye on the house"* or *"make it look like someone's home"* and it routes to the agent:
+*"keep an eye on the house"* or *"make it look like someone's home"* and it routes to the agent.
 
-1. Create an **`input_text` helper** named `input_text.cooper_watch_request` (the add-on watches it).
-2. Add a **script** ("Ask Cooper") with a required `goal` text field whose only action sets that
-   helper to `{{ goal }}`. **Expose the script to Assist.**
-3. The Guardian picks up whatever lands in the helper and runs it — watch, schedule, presence sim,
-   camera check, or a direct task — then **notifies the result** back to your phone.
-4. In your **conversation agent's instructions**, add a routing rule: *"For anything needing
-   watching, scheduling, presence simulation, camera vision, or multi-step work, call the 'Ask
-   Cooper' script with the user's request as `goal`; handle simple control and direct questions
-   yourself."*
+**On first run the add-on self-provisions the bridge** — it creates the `input_text` helper, the
+**"Ask Cooper"** script, and exposes that script to Assist. The Guardian then picks up whatever the
+script hands it and runs it (watch, schedule, presence sim, camera check, a direct task) and
+**notifies the result** back to your phone.
+
+The **one manual step** is a routing hint in your **conversation agent's instructions**: *"For
+anything needing watching, scheduling, presence simulation, camera vision, or multi-step work, call
+the 'Ask Cooper' script with the user's request as `goal`; handle simple control and direct
+questions yourself."* (Even without it, the agent will often call "Ask Cooper" on its own from the
+script's description — the hint just makes routing reliable.)
 
 Now the phone is a thin mic for the Guardian: simple commands resolve locally, everything agentic
 hands off to Cooper, which acts and reports back.

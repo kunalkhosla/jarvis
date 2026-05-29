@@ -128,6 +128,26 @@ const WATCH_REQUEST = "input_text.cooper_watch_request"; // bridge from the HA c
 const WATCH_INTENT = /\b(watch|keep an eye|monitor|guard|look after|alert me|notify me if|let me know if|keep watch)\b/i;
 const notifyAll = (msg: string) => { for (const tgt of cfg.notifyTargets) ha.notify(tgt, "Cooper", msg).catch(() => {}); };
 
+// Self-provision the voice bridge on first run, so setup is one paste (the routing prompt), not a
+// manual helper + script + exposure. Idempotent: only creates what's missing.
+const ASK_COOPER_SCRIPT = {
+  alias: "Ask Cooper",
+  description: "Hand ANY request to the Cooper guardian agent — watching/monitoring, presence simulation, scheduling timed sequences, camera checks, or multi-step tasks. Cooper runs it and notifies the result. Use for anything beyond simple one-shot device control or direct questions.",
+  fields: { goal: { description: "The full request, in plain language", required: true, selector: { text: {} } } },
+  mode: "queued",
+  sequence: [{ action: "input_text.set_value", target: { entity_id: WATCH_REQUEST }, data: { value: "{{ goal }}" } }],
+};
+async function provisionBridge() {
+  try {
+    const states = await ha.getStates();
+    const has = (id: string) => states.some((s) => s.entity_id === id);
+    if (!has(WATCH_REQUEST)) { await ha.wsCall({ type: "input_text/create", name: "Cooper Watch Request", max: 255 }); log(`${C.green}✓ created ${WATCH_REQUEST}${C.reset}`); }
+    if (!has("script.cooper_watch")) { await ha.postConfig("/config/script/config/cooper_watch", ASK_COOPER_SCRIPT); log(`${C.green}✓ created script.cooper_watch (Ask Cooper)${C.reset}`); }
+    await ha.wsCall({ type: "homeassistant/expose_entity", assistants: ["conversation"], entity_ids: ["script.cooper_watch"], should_expose: true }).catch(() => {});
+  } catch (e) { log(`${C.yellow}bridge provision skipped: ${e}${C.reset}`); }
+}
+provisionBridge();
+
 ha.subscribe((entityId, st) => {
   // Bridge: the phone/voice assistant forwards ANY request into this helper. Cooper runs it (watch,
   // do, schedule, answer) and notifies the result back — the phone is a thin mic for the guardian.

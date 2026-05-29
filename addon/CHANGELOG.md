@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.0
+- Self-provisions the voice bridge on first run: creates the `input_text` helper + the "Ask Cooper"
+  script and exposes it to Assist (idempotent — only what's missing). Setup drops to a single
+  routing-hint paste in the conversation agent. README architecture diagram refreshed (shows the
+  bridge; generic wake word).
+
 ## 0.13.1
 - Watch engine now reacts to camera AI-detection sensors (person/vehicle/animal/package) that
   carry no device_class — previously only raw "_motion" sensors triggered it, so the more

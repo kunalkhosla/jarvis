@@ -51,6 +51,9 @@ export class HaClient {
   callService = (domain: string, service: string, data: Record<string, unknown> = {}) =>
     this.rest(`/services/${domain}/${service}`, { method: "POST", body: JSON.stringify(data) });
 
+  /** POST to an HA config endpoint (e.g. /config/script/config/<id>) — used for self-provisioning. */
+  postConfig = (path: string, body: unknown) => this.rest(path, { method: "POST", body: JSON.stringify(body) });
+
   /** HA's own weather forecast for the home's exact location. Discovers the weather entity by
    *  DOMAIN (generic — no hardcoded entity names) and returns its forecast list. Beats web search,
    *  which reverse-geocodes coordinates to a nearby town and can be flat wrong. */
@@ -85,6 +88,24 @@ export class HaClient {
     this.callService("notify", target.replace(/^notify\./, ""), {
       title, message, ...(data && Object.keys(data).length ? { data } : {}),
     });
+
+  /** One-shot authenticated WebSocket command (auth → send → first result → close). For commands
+   *  with no REST equivalent, e.g. creating helpers (`input_text/create`) or exposing entities. */
+  wsCall(payload: Record<string, unknown>): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(this.cfg.haWsUrl);
+      let id = 1, done = false;
+      const finish = (fn: () => void) => { if (!done) { done = true; clearTimeout(timer); try { ws.close(); } catch { /* */ } fn(); } };
+      const timer = setTimeout(() => finish(() => reject(new Error("ws timeout"))), 10000);
+      ws.on("message", (raw) => {
+        const m = JSON.parse(raw.toString());
+        if (m.type === "auth_required") ws.send(JSON.stringify({ type: "auth", access_token: this.cfg.haToken }));
+        else if (m.type === "auth_ok") ws.send(JSON.stringify({ id: id++, ...payload }));
+        else if (m.type === "result") finish(() => (m.success ? resolve(m.result) : reject(new Error(JSON.stringify(m.error)))));
+      });
+      ws.on("error", (e) => finish(() => reject(e)));
+    });
+  }
 
   /** Subscribe to state_changed events; calls cb(entity_id, newState) on each change. */
   subscribe(cb: (entityId: string, state: EntityState) => void) {
