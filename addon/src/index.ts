@@ -134,10 +134,16 @@ let paused = false; // mirrors PAUSE_SWITCH; updated from state_changed + read a
 const pendingConfirm = new Map<string, { domain: string; service: string; data: Record<string, unknown> }>();
 let confirmSeq = 1;
 
+const confirmSig = (domain: string, service: string, data: Record<string, unknown>) =>
+  `${domain}.${service}:${[data?.entity_id].flat().filter(Boolean).join(",")}`;
 function requestConfirm(domain: string, service: string, data: Record<string, unknown>, reason: string): string {
+  const human = `${domain}.${service}${data?.entity_id ? ` on ${[data.entity_id].flat().join(", ")}` : ""}`;
+  // Dedupe: if the agent re-asks for the same action in a later step, don't spawn another Yes/No.
+  const sig = confirmSig(domain, service, data);
+  for (const p of pendingConfirm.values()) if (confirmSig(p.domain, p.service, p.data) === sig)
+    return `Already asked the user to confirm ${human} — still waiting on their Yes/No. Don't ask again.`;
   const id = `c${confirmSeq++}`;
   pendingConfirm.set(id, { domain, service, data });
-  const human = `${domain}.${service}${data?.entity_id ? ` on ${[data.entity_id].flat().join(", ")}` : ""}`;
   for (const tgt of cfg.notifyTargets)
     ha.notify(tgt, "Cooper — confirm?", reason || `Confirm: ${human}?`, {
       importance: "high", priority: "high", ttl: 0, tag: `cooper-${id}`,

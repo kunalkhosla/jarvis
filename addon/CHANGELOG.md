@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.1
+- Fix: confirm-tier actions no longer spawn duplicate Yes/No prompts when the agent re-asks in a
+  later loop step (dedupe pending confirmations by action). Caught in end-to-end testing — a single
+  "arm the alarm" produced two prompts && two executes.
+
 ## 0.15.0
 - **Interactive confirmation** (cooper#2): risky (confirm-tier) actions now send an actionable
   Yes/No notification to your phone and run **only if you tap Yes** (5-min expiry) — instead of
