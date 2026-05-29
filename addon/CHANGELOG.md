@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.15.1
+## 0.16.0
+- **Prompt caching** on the agent loop — two `cache_control` breakpoints: one on the system block
+  caches the static TOOLS + system prefix across evals (5-min TTL covers back-to-back watch/heartbeat
+  checks), and a rolling breakpoint on the latest message caches the growing conversation within a
+  multi-step eval — so the big `get_live_context` blob is billed at full price once per eval, not once
+  per step, and read at ~0.1x thereafter. `/healthz` and the per-step logs now show cache write/read
+  tokens so you can see it working.
 - Fix: confirm-tier actions no longer spawn duplicate Yes/No prompts when the agent re-asks in a
   later loop step (dedupe pending confirmations by action). Caught in end-to-end testing — a single
   "arm the alarm" produced two prompts && two executes.

@@ -108,11 +108,34 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     locationLine = `\n\nHome location: ${hc.location_name ?? "home"} — latitude ${hc.latitude}, longitude ${hc.longitude}, timezone ${hc.time_zone}. Use this for all geographic reasoning.`;
   } catch { /* location optional */ }
   const systemPrompt = SYSTEM + locationLine;
+  // PROMPT CACHING (2 breakpoints). Render order is tools → system → messages, so a single
+  // cache_control on the (only) system block caches the whole STATIC prefix — TOOLS + WEB_SEARCH +
+  // system — which is byte-identical across every eval for the life of the process. Back-to-back
+  // watch/heartbeat evals within the 5-min TTL read it at ~0.1x instead of re-billing it each time.
+  // (On Haiku 4.5 the min cacheable prefix is 4096 tokens; this prefix may be under that and silently
+  //  not cache — harmless, no error — but the rolling message cache below still covers the big stuff.)
+  // Cast: prompt caching is GA on the non-beta Messages API and 0.32.1 sends cache_control fine over
+  // the wire, but its non-beta TextBlockParam/Usage .d.ts lag the field. Bumping the SDK drops the cast.
+  const system = [
+    { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
+  ] as unknown as Anthropic.MessageCreateParams["system"];
+  // ROLLING message cache (the bigger win). Within one multi-step eval the history grows and is
+  // re-sent every step — including the ~8k-token get_live_context blob and any camera images. A
+  // breakpoint on the last block of the latest message caches that growing prefix: each step's new
+  // content is written once (~1.25x) and read at ~0.1x on every later step, so get_live_context is
+  // billed at full price ONCE, not once per step. Strip-then-set keeps exactly one message-level
+  // marker (system + rolling = 2 total, under the 4-per-request cap and the 20-block lookback).
+  const rollCache = (msgs: Anthropic.MessageParam[]) => {
+    for (const m of msgs) if (Array.isArray(m.content)) for (const b of m.content) delete (b as { cache_control?: unknown }).cache_control;
+    const last = msgs[msgs.length - 1]?.content;
+    if (Array.isArray(last) && last.length) (last[last.length - 1] as { cache_control?: unknown }).cache_control = { type: "ephemeral" };
+  };
 
   header(`▶ GOAL  ${C.reset}${C.bold}${goal}${C.reset}  ${C.gray}(observe=${cfg.observeMode}, model=${cfg.model})`);
   for (let step = 0; step < 12; step++) {
+    rollCache(messages);
     const res = await anthropic.messages.create({
-      model: cfg.model, max_tokens: 1024, system: systemPrompt,
+      model: cfg.model, max_tokens: 1024, system,
       tools: [...TOOLS, WEB_SEARCH] as Anthropic.MessageCreateParams["tools"], messages,
     });
     budget?.recordCall(Date.now(), res.usage);
@@ -122,7 +145,8 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     if (!finishing) for (const c of res.content) if (c.type === "text" && c.text.trim()) L(`  ${C.think}💭 ${c.text.trim().slice(0, 240)}${C.reset}`);
     if (res.content.some((c) => (c as any).type === "server_tool_use")) L(`    ${C.cyan}🌐 web_search (native)${C.reset}`);
     const toolUses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === "tool_use");
-    L(`  ${C.gray}step ${step}: ${toolUses.length} tool call(s) [stop_reason=${res.stop_reason}]${C.reset}`);
+    const u = res.usage as Anthropic.Usage & { cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
+    L(`  ${C.gray}step ${step}: ${toolUses.length} tool call(s) [stop_reason=${res.stop_reason}] tok in=${u.input_tokens} out=${u.output_tokens} cache(w=${u.cache_creation_input_tokens ?? 0} r=${u.cache_read_input_tokens ?? 0})${C.reset}`);
     // No client tool calls → Claude has answered directly (text). Return that.
     if (toolUses.length === 0) return textOf(res.content) || "(no response)";
 
