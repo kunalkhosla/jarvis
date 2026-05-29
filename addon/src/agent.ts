@@ -91,7 +91,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     });
     budget?.recordCall(Date.now(), res.usage);
     messages.push({ role: "assistant", content: res.content });
-    for (const c of res.content) if (c.type === "text" && c.text.trim()) L(`  ${C.dim}think: ${c.text.trim().slice(0, 240)}${C.reset}`);
+    for (const c of res.content) if (c.type === "text" && c.text.trim()) L(`  ${C.think}💭 ${c.text.trim().slice(0, 240)}${C.reset}`);
     if (res.content.some((c) => (c as any).type === "server_tool_use")) L(`    ${C.cyan}🌐 web_search (native)${C.reset}`);
     const toolUses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === "tool_use");
     L(`  ${C.gray}step ${step}: ${toolUses.length} tool call(s) [stop_reason=${res.stop_reason}]${C.reset}`);

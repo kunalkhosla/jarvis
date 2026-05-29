@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.2
+- Logs: reasoning lines now use a distinct violet color with a 💭 marker (were washed-out dim),
+  so thinking reads apart from tool calls and results.
+
 ## 0.11.1
 - Fix: a malformed POST body crashed the whole add-on (unhandled JSON parse → process exit →
   supervisor restart). Now returns `400 invalid JSON`; the request handler and process are guarded
