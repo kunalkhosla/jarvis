@@ -1,0 +1,48 @@
+# Changelog
+
+## 0.10.0
+- Deferred / triggered do-goals: "prepare the home for my arrival" or "in an hour…" becomes a
+  scheduled task (fires at a time, or when someone arrives home) instead of running immediately.
+- Tasks persist, show in `/healthz`, and are cancelable via `DELETE /task/:id`.
+
+## 0.9.0
+- Presence-aware stand-down: an away-watch ("keep an eye while we're out") stands down when
+  everyone is home again — deterministic, gated so arming-while-home won't instant-cancel.
+
+## 0.8.0
+- Time-boxed watches: "watch until Monday evening" / "for 2 hours" auto-stands-down when the window
+  ends. Presence-simulation guidance so "make it look like someone's home" is lived-in, not robotic.
+
+## 0.7.0
+- Alerts carry an agent-chosen priority: normal / high / critical. Critical bypasses silent &
+  Do-Not-Disturb (alarm channel) — Cooper decides the urgency by severity.
+
+## 0.6.0
+- Photo-in-alert: notifications can attach a live camera snapshot. Notify now fires even in
+  observe mode (observe gates device actions, not how Cooper talks to you).
+- Visitor classification (delivery / known / unknown), whole-home "check on the house" tour.
+- Optional daily morning briefing. Color/structured add-on logs.
+
+## 0.5.0
+- Camera vision: `look_at_camera` fetches a live snapshot and Cooper *sees* the scene (Reolink
+  full-res falls back to the working substream).
+- Cost guard: per-hour / per-day caps on automatic LLM calls, token accounting in `/healthz`.
+
+## 0.4.0
+- SQLite persistence: watch-goals and an action log survive restarts.
+
+## 0.3.0
+- Phone → guardian bridge: register a watch-goal by talking to the HA voice assistant.
+
+## 0.2.2
+- Anti-hallucination guard: `call_service` rejects entities that don't exist.
+
+## 0.2.1
+- Native Anthropic web search (dropped the separate search-provider key).
+
+## 0.2.0
+- Watch engine: react to relevant home events (filtered, debounced, cooldown) + heartbeat.
+
+## 0.1.0
+- Initial guardian scaffold: Claude tool-use loop, tiered guardrails, observe-mode, `/healthz`,
+  `POST /goal`.
