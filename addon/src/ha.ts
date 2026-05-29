@@ -51,6 +51,19 @@ export class HaClient {
   callService = (domain: string, service: string, data: Record<string, unknown> = {}) =>
     this.rest(`/services/${domain}/${service}`, { method: "POST", body: JSON.stringify(data) });
 
+  /** HA's own weather forecast for the home's exact location. Discovers the weather entity by
+   *  DOMAIN (generic — no hardcoded entity names) and returns its forecast list. Beats web search,
+   *  which reverse-geocodes coordinates to a nearby town and can be flat wrong. */
+  async getForecast(type: "daily" | "hourly" = "daily"): Promise<{ entity: string; forecast: unknown[] } | null> {
+    const w = (await this.getStates()).find((s) => s.entity_id.startsWith("weather."));
+    if (!w) return null;
+    const d = await this.rest(`/services/weather/get_forecasts?return_response`, {
+      method: "POST", body: JSON.stringify({ entity_id: w.entity_id, type }),
+    });
+    const forecast = (d as any)?.service_response?.[w.entity_id]?.forecast ?? [];
+    return { entity: w.entity_id, forecast };
+  }
+
   /** Fetch a still JPEG from a camera via HA's camera_proxy, as base64 for Claude vision.
    *  Reolink full-res "*_fluent" streams 500 on snapshot — fall back to the "*_clear" substream. */
   async cameraSnapshot(entityId: string): Promise<{ base64: string; mediaType: "image/jpeg" } | null> {

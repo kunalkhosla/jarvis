@@ -37,6 +37,8 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
   bedrooms or anything disruptive. Reversible only; confirm anything risky. Needs observe_mode off
   to actually act.
 - You have built-in web search for live external facts. Use notify to alert the user. Call finish when done.
+- WEATHER: always use get_forecast (HA's forecast for your exact coordinates). NEVER web-search
+  weather — web results reverse-geocode to a nearby town and are often wrong.
 - LOCATION: a "Home location" line is provided below — use ONLY that for anything geographic
   (weather, sunrise, traffic, local search). NEVER infer location from device/network/entity/SSID
   names (e.g. a street or Wi-Fi name like "...Dakota..." is NOT a place); they are not geography.
@@ -52,6 +54,8 @@ const TOOLS: Anthropic.Tool[] = [
       properties: { domain: { type: "string" }, service: { type: "string" }, data: { type: "object" }, reason: { type: "string" } } } },
   { name: "look_at_camera", description: "See live camera snapshot(s). Pass camera entity_ids or names (e.g. ['driveway','aarlo_kitchen']); returns the current image(s) for you to describe. Max 4 per call.",
     input_schema: { type: "object", required: ["cameras"], properties: { cameras: { type: "array", items: { type: "string" } } } } },
+  { name: "get_forecast", description: "HA's local weather forecast for the home's exact location. Use this for ANY weather question — never web-search weather. Optional type: daily (default) or hourly.",
+    input_schema: { type: "object", properties: { type: { type: "string", enum: ["daily", "hourly"] } } } },
   { name: "notify", description: "Send a push notification. 'camera' (entity_id/name) attaches a live photo. 'priority' sets urgency by YOUR judgment of severity: normal=routine FYI, high=wants attention now (visitor/package), critical=genuine safety only (intruder/smoke/flood) — critical bypasses silent & Do-Not-Disturb and sounds the alarm channel.",
     input_schema: { type: "object", required: ["message"], properties: { message: { type: "string" }, camera: { type: "string" }, priority: { type: "string", enum: ["normal", "high", "critical"] } } } },
   { name: "finish", description: "End: summarize what you did / decided.",
@@ -143,6 +147,11 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         L(`    ${C.cyan}📷 look_at_camera(${names.join(",")}) -> ${nImg} image(s)${C.reset}`); log.push(`looked at ${nImg} camera(s)`);
         results.push({ type: "tool_result", tool_use_id: t.id, content: blocks.length ? blocks : [{ type: "text", text: "no images" }] });
         continue;
+      }
+      else if (t.name === "get_forecast") {
+        const fc = await ha.getForecast(a.type === "hourly" ? "hourly" : "daily");
+        out = fc ? JSON.stringify(fc.forecast.slice(0, 8)) : "no weather entity configured in HA";
+        L(`    ${C.cyan}🌤 get_forecast(${a.type ?? "daily"}) -> ${fc ? (fc.forecast.length + " entries") : "none"}${C.reset}`);
       }
       else if (t.name === "notify") {
         // Notify is how Cooper TALKS to you — it always fires, even in observe mode (which only

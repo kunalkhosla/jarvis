@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.5
+- Weather now comes from HA's own forecast for your exact location, via a new get_forecast tool
+  (discovers the weather entity by domain — no hardcoded names). Replaces web-searching weather,
+  which reverse-geocoded coordinates to a nearby town and could be flat wrong (wrong town AND
+  wrong conditions).
+
 ## 0.11.4
 - Fix: location reasoning (weather, etc.) is now grounded in HA's real configured location
   (lat/lon/timezone), injected into every eval. Previously, with no location, the model could
