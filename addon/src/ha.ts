@@ -163,7 +163,17 @@ export class HaClient {
   async upsertAutomation(id: string, config: Record<string, unknown>): Promise<void> {
     await this.rest(`/config/automation/config/${id}`, { method: "POST", body: JSON.stringify(config) });
     await this.callService("automation", "reload");
+    // HA derives the entity_id from the ALIAS slug, NOT the config id — so a self-disabling rule's
+    // automation.turn_off on automation.<id> would target a nonexistent entity ("Entity not found") and
+    // never fire. Force the entity_id to automation.<id> so self-references resolve deterministically.
+    try {
+      const want = `automation.${id}`;
+      const cur = (await this.getStates()).find((s) => s.entity_id.startsWith("automation.") && s.attributes?.id === id);
+      if (cur && cur.entity_id !== want) await this.wsCall({ type: "config/entity_registry/update", entity_id: cur.entity_id, new_entity_id: want });
+    } catch { /* rename best-effort — self-ref may still mismatch on collision, but the rule is created */ }
   }
+  /** Read back an automation's stored config (for the dead-rule reaper / inspection). */
+  getAutomationConfig = (id: string): Promise<Record<string, unknown>> => this.rest(`/config/automation/config/${id}`);
   /** Delete an automation's config by id, then reload. */
   async deleteAutomation(id: string): Promise<void> {
     await this.rest(`/config/automation/config/${id}`, { method: "DELETE" });

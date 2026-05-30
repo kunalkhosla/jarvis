@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.3
+- **Self-disabling rules actually disable now.** HA derives an automation's entity_id from the alias
+  slug, not the config id — so a rule's `automation.turn_off` on `automation.<id>` hit a nonexistent
+  entity ("Entity not found") and silently did nothing. New automations are now renamed to
+  `automation.<id>` on creation, so self-references resolve and "then stop" works.
+- **Dead rules get cleaned up.** One-shot "today/tonight/N-times" rules carry a date condition; once that
+  date passes they can never fire again but used to linger forever. Cooper now sweeps them (on
+  interaction, throttled): any `[Cooper]` automation whose date condition is provably in the past is
+  deleted automatically — no more graveyard of dead automations.
+
 ## 1.6.2
 - **The (advisory) semantic check now catches lifecycle/scope mistakes.** The recurring weak spot is
   time-scoping — a "for 2 hours" watch that never actually stops, or a "tonight" rule whose same-day date

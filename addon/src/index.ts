@@ -168,6 +168,7 @@ export interface Turn { role: string; text: string }
 async function handleUtterance(text: string, history?: Turn[], session?: string, deviceId?: string, userId?: string, onProgress?: (text: string) => void): Promise<string> {
   const tnow = Date.now();
   await refreshPaused(); // keep the kill-switch fresh per turn (v2 has no state_changed subscription)
+  reapDeadAutomations().catch(() => {}); // opportunistic cleanup of provably-dead [Cooper] rules (throttled)
 
   // In-chat confirmation: if this session asked a yes/no last turn, resolve it before anything else.
   if (session) {
@@ -231,6 +232,33 @@ async function handleUtterance(text: string, history?: Turn[], session?: string,
   try {
     return await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${callerCtx}${mgmtCtx}${histCtx}`, budget, askHooks, onProgress);
   } catch (e) { log(`   ${C.red}request error: ${e}${C.reset}`); return `Sorry — I hit an error: ${e}`; }
+}
+
+// ---- Dead-rule reaper ----
+// Cooper's one-shot rules ("today"/"tonight"/"N times") carry a date condition; once that date passes
+// the rule can NEVER fire again but lingers forever. Sweep them on interaction (throttled, no background
+// loop): delete [Cooper] automations whose top-level date condition is provably in the past — zero false
+// positives (it literally cannot fire), so it's safe to remove without asking.
+let lastReap = 0;
+async function reapDeadAutomations(): Promise<void> {
+  const now = Date.now();
+  if (now - lastReap < 3_600_000) return; // at most hourly
+  lastReap = now;
+  try {
+    const states = await ha.getStates();
+    const mine = states.filter((s) => s.entity_id.startsWith("automation.") && (String(s.attributes?.id ?? "").startsWith("cooper_") || String(s.attributes?.friendly_name ?? "").startsWith("[Cooper]")));
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: process.env.TZ || "UTC" }); // YYYY-MM-DD local
+    for (const a of mine) {
+      const id = String(a.attributes?.id ?? ""); if (!id) continue;
+      let txt: string;
+      try { txt = JSON.stringify(await ha.getAutomationConfig(id)); } catch { continue; }
+      if (/"condition"\s*:\s*"or"/.test(txt)) continue; // OR logic: a past date may not mean dead — skip
+      const dates = [...txt.matchAll(/strftime\('%Y-%m-%d'\)\s*==\s*'(\d{4}-\d{2}-\d{2})'/g)].map((m) => m[1]);
+      if (dates.length && dates.every((d) => d < today)) {
+        try { await ha.deleteAutomation(id); log(`${C.gray}🧹 reaped dead [Cooper] automation ${id} (${dates.join(",")} < ${today})${C.reset}`); } catch { /* */ }
+      }
+    }
+  } catch { /* best effort */ }
 }
 
 // ---- Kill-switch ----
