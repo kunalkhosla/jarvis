@@ -1,0 +1,12 @@
+{
+  "domain": "cooper",
+  "name": "Cooper",
+  "version": "0.1.0",
+  "config_flow": true,
+  "integration_type": "service",
+  "dependencies": ["conversation"],
+  "codeowners": ["@kunalkhosla"],
+  "iot_class": "local_polling",
+  "documentation": "https://github.com/kunalkhosla/cooper",
+  "issue_tracker": "https://github.com/kunalkhosla/cooper/issues"
+}

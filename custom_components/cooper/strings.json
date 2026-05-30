@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Cooper",
+        "description": "Point this at the Cooper Guardian add-on's control endpoint. The add-on serves it on port 8099 of your Home Assistant host.",
+        "data": {
+          "url": "Cooper add-on URL",
+          "token": "Control token (optional)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Couldn't reach Cooper at that URL (GET /healthz failed). Check the host and port."
+    },
+    "abort": {
+      "already_configured": "This Cooper endpoint is already configured."
+    }
+  }
+}

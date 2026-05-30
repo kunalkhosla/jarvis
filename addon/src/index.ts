@@ -88,6 +88,19 @@ createServer(async (req, res) => {
       return json(500, { error: String(e) });
     }
   }
+  // The custom HA conversation integration POSTs each turn here and speaks the reply. Synchronous:
+  // runs the full eval and returns the reply (no input_text mailbox, no 255-char cap, no bleed).
+  if (req.method === "POST" && req.url === "/ask") {
+    let raw = ""; for await (const c of req) raw += c;
+    let body: any;
+    try { body = JSON.parse(raw || "{}"); } catch { return json(400, { error: "invalid JSON" }); }
+    const { text, history } = body;
+    if (!text || typeof text !== "string") return json(400, { error: "text (string) required" });
+    try {
+      const reply = await handleUtterance(text.trim(), Array.isArray(history) ? history : undefined);
+      return json(200, { reply });
+    } catch (e) { return json(500, { error: String(e) }); }
+  }
   if (req.method === "DELETE" && req.url?.startsWith("/goal/")) {
     const id = Number(req.url.split("/")[2]); const i = goals.findIndex((g) => g.id === id);
     if (i < 0) return json(404, { error: "no such goal" });
@@ -267,6 +280,44 @@ const hooks: Hooks = {
   },
 };
 
+// ---- Single entrypoint for a user utterance (stop / watch / do) → reply text ----
+// Shared by the HTTP /ask endpoint (the custom conversation integration) and the legacy input_text
+// bridge. Does the deterministic stop/watch routing, runs the goal, and RETURNS the reply string —
+// callers decide how to deliver it (speak inline, push, stream). `history` is recent conversation
+// turns, injected as context so follow-ups resolve ("turn it off" → the thing from the last turn).
+export interface Turn { role: string; text: string }
+async function handleUtterance(text: string, history?: Turn[]): Promise<string> {
+  const tnow = Date.now();
+  const histCtx = history && history.length
+    ? `\n\nRecent conversation (for context / pronoun resolution — newest last):\n${history.map((h) => `${h.role}: ${h.text}`).join("\n")}`
+    : "";
+  // Stop/stand-down — deterministic, no LLM. Must win over WATCH_INTENT ("watch" is in both).
+  if (STOP_INTENT.test(text)) {
+    const { n } = removeWatches(tnow);
+    const s = cancelScheduled();
+    header(`🛑 stop: "${text}" → cancelled ${n} watch(es), ${s} scheduled sequence(s)`);
+    store.logAction(tnow, null, "ask:stop", text);
+    return n || s ? `Stopped ${n} watch${n !== 1 ? "es" : ""} and ${s} scheduled sequence${s !== 1 ? "s" : ""}.` : "Nothing active to stop.";
+  }
+  const isWatch = wantsStandingWhileAway(text) || wantsPresenceStandDown(text) || WATCH_INTENT.test(text);
+  if (isWatch) {
+    const g = store.addGoal(text, tnow, tnow, parseExpiry(text, tnow), wantsPresenceStandDown(text), wantsStandingWhileAway(text));
+    goals.push(g);
+    header(`📥 watch: "${text}" (#${g.id})${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.untilPresent ? " [until home]" : ""}${g.whileAway ? " [standing while-away]" : ""}`);
+    store.logAction(g.created, g.id, "watch:create", text);
+    if (g.whileAway) { checkPresenceStandDown(tnow).catch(() => {}); return `Standing watch set: "${text}". I'll arm whenever everyone's out.`; }
+    try { const r = await runGoal(cfg, ha, text, `(initial check — establish what's normal)${histCtx}`, budget, hooks); log(`   ${C.green}→ ${r}${C.reset}`); return r; }
+    catch (e) { log(`   ${C.red}watch intake error: ${e}${C.reset}`); return `Couldn't set that watch up: ${e}`; }
+  }
+  // Any non-watch request → run it now (control / schedule / answer) and report the result back.
+  header(`📥 request: "${text}"`);
+  store.logAction(tnow, null, "ask:do", text);
+  try {
+    const r = await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${histCtx}`, budget, hooks);
+    log(`   ${C.green}→ ${r}${C.reset}`); return r;
+  } catch (e) { log(`   ${C.red}request error: ${e}${C.reset}`); return `Sorry — I hit an error: ${e}`; }
+}
+
 // Self-provision the voice bridge on first run, so setup is one paste (the routing prompt), not a
 // manual helper + script + exposure. Idempotent: only creates what's missing.
 const SCRIPT_WAIT_S = 9; // how long Ask Cooper blocks for an inline reply before falling back to async push (> BRIDGE_INLINE_MS, so the host's "spoke it inline" guess never drops a reply)
@@ -314,31 +365,9 @@ ha.subscribe((entityId, st) => {
     const text = st.state.trim();
     const tnow = Date.now();
     ha.callService("input_text", "set_value", { entity_id: WATCH_REQUEST, value: "" }).catch(() => {}); // clear early
-    // Stop/stand-down — deterministic, no LLM. Must win over WATCH_INTENT ("watch" is in both).
-    if (STOP_INTENT.test(text)) {
-      const { n } = removeWatches(tnow);
-      const s = cancelScheduled();
-      header(`🛑 stop from phone: "${text}" → cancelled ${n} watch(es), ${s} scheduled sequence(s)`);
-      store.logAction(tnow, null, "bridge:stop", text);
-      deliverBridgeReply(tnow, n || s ? `Stopped ${n} watch${n !== 1 ? "es" : ""} and ${s} scheduled sequence${s !== 1 ? "s" : ""}.` : "Nothing active to stop.");
-      return;
-    }
-    const isWatch = wantsStandingWhileAway(text) || wantsPresenceStandDown(text) || WATCH_INTENT.test(text);
-    if (isWatch) {
-      const g = store.addGoal(text, tnow, tnow, parseExpiry(text, tnow), wantsPresenceStandDown(text), wantsStandingWhileAway(text));
-      goals.push(g);
-      header(`📥 watch from phone: "${text}" (#${g.id})${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.untilPresent ? " [until home]" : ""}${g.whileAway ? " [standing while-away]" : ""}`);
-      store.logAction(g.created, g.id, "watch:create", `bridge: ${text}`);
-      if (g.whileAway) { checkPresenceStandDown(tnow).catch(() => {}); deliverBridgeReply(tnow, `Standing watch set: "${text}". I'll arm whenever everyone's out.`); }
-      else runGoal(cfg, ha, text, "(initial check — establish what's normal)", budget, hooks)
-        .then((r) => { log(`   ${C.green}→ ${r}${C.reset}`); deliverBridgeReply(tnow, r); }).catch((e) => { log(`   ${C.red}intake error: ${e}${C.reset}`); deliverBridgeReply(tnow, `Couldn't set that watch up: ${e}`); });
-    } else {
-      // Any non-watch request → run it now (control / schedule / answer) and report the result back.
-      header(`📥 request from phone: "${text}"`);
-      store.logAction(tnow, null, "bridge:do", text);
-      runGoal(cfg, ha, text, "(handed over from the voice assistant — handle it now; reply in one or two short sentences the assistant can speak aloud)", budget, hooks)
-        .then((r) => { log(`   ${C.green}→ ${r}${C.reset}`); deliverBridgeReply(tnow, r); }).catch((e) => { log(`   ${C.red}bridge error: ${e}${C.reset}`); deliverBridgeReply(tnow, `Sorry — I hit an error: ${e}`); });
-    }
+    handleUtterance(text)
+      .then((r) => deliverBridgeReply(tnow, r))
+      .catch((e) => deliverBridgeReply(tnow, `Sorry — I hit an error: ${e}`));
     return;
   }
   // Presence change → fire arrival tasks + check away-watch stand-down (deterministic, no LLM).

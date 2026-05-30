@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.21.0
+- **New `POST /ask` endpoint — the foundation for Cooper as a native Assist agent.** A request
+  (`{text, session_id, history?}`) runs the full eval and returns `{reply}` synchronously — no
+  `input_text` mailbox, no 255-char cap, no cross-request answer bleed. The stop/watch/do routing
+  that lived inside the voice-bridge handler is now a shared `handleUtterance()` used by both `/ask`
+  and the legacy bridge, and it accepts recent conversation `history` so follow-ups resolve
+  ("turn it off" → the thing from the last turn).
+- **New custom integration `custom_components/cooper/`** (ships in this repo, HACS-installable):
+  registers Cooper directly as a Home Assistant **conversation agent** that calls `/ask`. Selecting
+  it as your Assist conversation agent replaces the old stock-LLM-agent + Ask Cooper script + mailbox
+  bridge with one brain and a direct request/response. The legacy `input_text` bridge still works in
+  parallel for now (removed in a later release once the integration is proven).
+
 ## 0.20.0
 - **Cooper now answers out loud, in the same breath.** The voice bridge was fire-and-forget — the
   assistant only ever said "handing that to Cooper" and the real reply arrived later as a push. The
