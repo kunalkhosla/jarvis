@@ -121,13 +121,12 @@ class CooperConversationEntity(conversation.ConversationEntity):
                 user_input.text, conv_id, history, device_id, user_id
             ):
                 kind = ev.get("type")
-                if kind == "step" and ev.get("text"):
-                    yield {"content": f"{ev['text']} "}
+                if kind == "chunk" and ev.get("text"):
+                    # Token deltas (and the odd status line) — emit as-is; they carry their own spacing.
+                    yield {"content": ev["text"]}
                 elif kind == "final":
-                    text = ev.get("reply") or ""
-                    final.append(text)
-                    if text:
-                        yield {"content": text}
+                    # History only — the visible/spoken text already streamed as chunks above.
+                    final.append(ev.get("reply") or "")
 
         with (
             chat_session.async_get_chat_session(self.hass, conv_id) as session,

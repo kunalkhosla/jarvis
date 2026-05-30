@@ -43,7 +43,9 @@ createServer(async (req, res) => {
         res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache", "Connection": "keep-alive" });
         const send = (obj: unknown) => { try { res.write(JSON.stringify(obj) + "\n"); } catch { /* client gone */ } };
         try {
-          const reply = await handleUtterance(text.trim(), hist, sid, did, uid, (t) => send({ type: "step", text: t }));
+          // onProgress emits content chunks (token deltas as Cooper types, plus the odd status line) —
+          // the integration concatenates them into the spoken response. `final` is for history only.
+          const reply = await handleUtterance(text.trim(), hist, sid, did, uid, (t) => send({ type: "chunk", text: t }));
           send({ type: "final", reply });
         } catch (e) { send({ type: "final", reply: `Sorry — I hit an error: ${String(e).slice(0, 200)}` }); }
         return res.end();

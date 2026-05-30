@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.0
+- **Token-streaming — Cooper's words are spoken as it types them.** Instead of waiting ~3-4s for a whole
+  step before any feedback, the model's response now streams token-by-token, so the first words land in
+  ~1s and the voice pipeline starts speaking immediately. (Needs the **Cooper integration via HACS at
+  0.4.0** too; degrades safely to the previous behavior if streaming isn't available.)
+- **Fixes the judgment-callback being refused.** `conversation.process` (a rule waking Cooper to look at
+  a camera and decide) was wrongly treated as a "risky" action and blocked, forcing rules to drop the
+  smart step. It's now correctly auto-tier — the core "watch and judge" pattern works.
+- **Real counting — "alert me N times then stop" actually stops now.** New `create_counter` capability:
+  Cooper provisions a counter helper and the rule increments/gates on it. Previously it reached for
+  `repeat.index` (loop-only, doesn't count separate triggers), so it never stopped.
+
 ## 1.5.1
 - **Fixes a 1.5.0 regression where authoring could spin and create nothing.** Three causes:
   - The deterministic validator wrongly rejected a **self-disabling rule's reference to its own

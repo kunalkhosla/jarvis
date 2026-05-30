@@ -83,6 +83,18 @@ export class HaClient {
     return s;
   }
 
+  /** Provision a counter helper (HA `counter.*`) so an authored rule can count occurrences across
+   *  separate trigger fires ("alert me N times then stop") — repeat.index is loop-only and can't.
+   *  Created via the storage-collection WS command (like the kill-switch input_boolean). The entity_id
+   *  is counter.<slug-of-name>. Returns the entity_id, or "" on failure. */
+  async createCounter(name: string, initial = 0, step = 1): Promise<string> {
+    try {
+      await this.wsCall({ type: "counter/create", name, initial, step, restore: true });
+      const slug = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      return `counter.${slug}`;
+    } catch { return ""; }
+  }
+
   /** Render an HA Jinja template (e.g. for area/registry data not exposed over plain REST). */
   async template(t: string): Promise<string> {
     const r = await fetch(`${this.cfg.haBaseUrl}/template`, {

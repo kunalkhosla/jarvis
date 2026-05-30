@@ -17,6 +17,10 @@ const AUTO_DOMAINS = new Set([
   // already vetted all-auto at create time (vetConfig), so requiring a second confirm just to RUN one
   // is pointless friction — and a user's pre-existing script/automation is their own intent.
   "script", "automation",
+  // conversation.process is the JUDGMENT CALLBACK (a rule waking Cooper to look + decide) — the core v2
+  // pattern, not a risky action; the re-entered turn applies its own guardrails. counter is just
+  // inc/dec/reset of a counter helper (used for "N times" lifecycles) — reversible bookkeeping.
+  "conversation", "counter",
 ]);
 
 /** The state a target entity should reach after a given service, so a caller can read the entity back

@@ -40,10 +40,12 @@ ROUTE every request to the lightest thing that does the job:
    • HA TIME/SCOPE MECHANISMS (HA quirks you can't infer — YOU decide which the request needs): scope to
      a calendar day with a DATE condition {{ now().strftime('%Y-%m-%d') == 'YYYY-MM-DD' }} (a 00:00–23:59
      time window is true EVERY day and scopes nothing); a window that CROSSES MIDNIGHT is a time condition
-     with "after" later than "before" (e.g. 18:00→06:00); cap a count or make it one-shot with an action
-     calling automation.turn_off on itself, or a counter helper; attach a photo in a notify action with
-     data {image:"/api/camera_proxy/<camera_entity>"} (a bare "camera" key is ignored), to a specific
-     notify target (not notify.notify). Reason from the user's actual intent to pick which applies.
+     with "after" later than "before" (e.g. 18:00→06:00); one-shot → an action calling automation.turn_off
+     on itself. COUNTING ACROSS SEPARATE TRIGGER FIRES ("N times then stop") — repeat.index is LOOP-only
+     and does NOT count separate triggers; use create_counter first, then counter.increment on each fire
+     and gate on {{ states('counter.x')|int >= N }} (counter.reset at the cycle boundary if it recurs).
+     Photo in a notify action → data {image:"/api/camera_proxy/<camera_entity>"} (a bare "camera" key is
+     ignored), to a specific notify target (not notify.notify). Reason from the user's intent to pick.
    • The create tool VALIDATES before saving: deterministically that every entity_id and service exists,
      AND that the rule genuinely MATCHES the request (scope, lifecycle, every action, the alert reaching
      the user). On success, just confirm to the user and finish. If it reports problems, fix them and
@@ -69,8 +71,10 @@ silent/DND, don't overuse.
 GUARDRAILS & HONESTY: call_service auto-runs reversible, asks for risky, refuses forbidden; authored
 rules whose actions are risky are vetted the same way. "[observe]" = NOT performed (observe mode) — say
 you *would*, never claim you did. "[paused]" = kill-switch on — say so. Report tool results faithfully.
-Always end with a short spoken reply (call finish, or just reply) — never end a turn silently. Keep ALL
-text brief and spoken-friendly — a sentence or two, never a wall of detail or internal/technical reasoning.`;
+Always end with a short spoken reply (call finish, or just reply) — never end a turn silently.
+YOUR TEXT IS STREAMED AND SPOKEN ALOUD AS YOU TYPE IT. So: before each tool, give just ONE short, friendly
+line about what you're doing right now ("Let me take a look." / "Setting that up."); keep every reply to a
+sentence or two; NEVER output internal reasoning, technical detail, entity_ids, or a wall of text.`;
 
 const TOOLS: Anthropic.Tool[] = [
   { name: "get_live_context", description: "Read current live entity states (each tagged with its HA AREA when assigned). Optional domains filter.",
@@ -100,6 +104,8 @@ const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: {} } },
   { name: "delete_script", description: "Delete a script by its config `id`/object_id (from list_scripts). Use when a sequence is no longer needed.",
     input_schema: { type: "object", required: ["id"], properties: { id: { type: "string" } } } },
+  { name: "create_counter", description: "Provision a COUNTER helper for counting occurrences ACROSS separate trigger fires — the ONLY correct way to do 'alert me N times then stop' or any cross-event count (repeat.index is loop-only and does NOT count separate triggers). Returns the new counter.* entity_id. Then in your automation: counter.increment it on each fire, gate on its value ({{ states('counter.x')|int >= N }}), and counter.reset at the cycle boundary if it should recur. `name` is a short label (prefix 'cooper'). Create the counter BEFORE the automation that references it.",
+    input_schema: { type: "object", required: ["name"], properties: { name: { type: "string" }, initial: { type: "number" }, step: { type: "number" } } } },
   { name: "finish", description: "End the turn. `summary` is spoken ALOUD to the user, so write it as a short, natural sentence addressed to THEM (second person) — e.g. 'Turned on the gym lights.' / 'Have a good workout!' / 'I set up the backyard watch.' NOT a third-person log line like 'User is heading to the gym; acknowledged their departure.'",
     input_schema: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } } },
 ];
@@ -248,10 +254,21 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
   const semChecked = new Set<string>(); // rule ids already semantic-checked this turn — don't re-nitpick (anti-loop)
   for (let step = 0; step < 12; step++) {
     rollCache(messages);
-    const res = await anthropic.messages.create({
+    const params = {
       model: cfg.model, max_tokens: 4096, system, // 4096: room for multi-action turns (e.g. many sprinkler zones) without truncating
       tools: [...TOOLS, WEB_SEARCH] as Anthropic.MessageCreateParams["tools"], messages,
-    });
+    };
+    // TOKEN-STREAM when a progress sink is wired: forward Cooper's words as they generate (first words
+    // in ~1s instead of waiting for the whole step), so the voice pipeline starts speaking immediately.
+    // No sink (autonomous/judge calls) → plain create. finalMessage() yields the same Message for tools.
+    let res: Anthropic.Message;
+    if (onProgress) {
+      const s = anthropic.messages.stream(params as Anthropic.MessageStreamParams);
+      s.on("text", (delta) => onProgress(delta));
+      res = await s.finalMessage();
+    } else {
+      res = await anthropic.messages.create(params as Anthropic.MessageCreateParamsNonStreaming);
+    }
     budget?.recordCall(Date.now(), res.usage);
     messages.push({ role: "assistant", content: res.content });
     // Skip logging the narration on a finish turn — the green "✔ finish" line already says it.
@@ -261,18 +278,17 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     const toolUses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === "tool_use");
     const u = res.usage as Anthropic.Usage & { cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
     L(`  ${C.gray}step ${step}: ${toolUses.length} tool call(s) [stop_reason=${res.stop_reason}] tok in=${u.input_tokens} out=${u.output_tokens} cache(w=${u.cache_creation_input_tokens ?? 0} r=${u.cache_read_input_tokens ?? 0})${C.reset}`);
-    // Stream a SHORT, controlled status per step so the user gets running feedback (and the voice
-    // pipeline has something to speak) — NOT Cooper's raw interim text, which is verbose internal
-    // reasoning. Dedupe so the same line isn't repeated.
-    if (onProgress && !finishing) { const n = stepNarration(toolUses); if (n && !narrated.has(n)) { narrated.add(n); onProgress(n); } }
-    // No client tool calls → Claude has answered directly (text). Return that.
+    // Cooper's words for this step already streamed live (the .on("text") above). If it called a tool
+    // WITHOUT narrating, drop in one short controlled status so there's still feedback. Deduped.
+    if (onProgress && !finishing && !textOf(res.content)) { const n = stepNarration(toolUses); if (n && !narrated.has(n)) { narrated.add(n); onProgress(` ${n}`); } }
+    // No client tool calls → Claude has answered directly (text, already streamed). Return it for history.
     if (toolUses.length === 0) return textOf(res.content) || lastConfirmation || "Okay — done.";
 
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const t of toolUses) {
       const a = t.input as any;
       let out = "";
-      if (t.name === "finish") { L(`${C.green}${C.bold}✔ finish:${C.reset}${C.green} ${a.summary}${C.reset}`); return a.summary; }
+      if (t.name === "finish") { L(`${C.green}${C.bold}✔ finish:${C.reset}${C.green} ${a.summary}${C.reset}`); if (onProgress) onProgress(` ${a.summary}`); return a.summary; }
       else if (t.name === "create_automation") {
         // Enforce a clear Cooper convention regardless of what the model passed: id prefix `cooper_`,
         // alias prefix `[Cooper] `, and a description recording the request — so it's unmistakable in
@@ -368,6 +384,13 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         if (!id) out = "no id given";
         else { try { await ha.deleteScript(id); out = `deleted script ${id}`; lastConfirmation = "Removed that script."; } catch (e) { out = `ERROR deleting: ${String(e).slice(0, 200)}`; } }
         L(`    ${C.cyan}🎬 delete_script(${id}) -> ${out}${C.reset}`); log.push(out);
+      }
+      else if (t.name === "create_counter") {
+        let nm = String(a.name ?? "").trim().replace(/^\[?cooper\]?\s*/i, "").trim() || "count";
+        nm = `Cooper ${nm}`.slice(0, 60);
+        const ent = await ha.createCounter(nm, Number(a.initial) || 0, Number(a.step) || 1);
+        out = ent ? `created ${ent} (initial ${Number(a.initial) || 0}, step ${Number(a.step) || 1}) — increment/reset it from your automation and gate on its value` : "ERROR: could not create counter";
+        L(`    ${C.cyan}🔢 create_counter -> ${out}${C.reset}`); log.push(out);
       }
       else if (t.name === "get_live_context") {
         const [ents, areas] = await Promise.all([ha.liveContext(a.domains), ha.areaMap()]);
