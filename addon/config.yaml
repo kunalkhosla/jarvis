@@ -4,7 +4,7 @@
 name: Cooper Guardian
 version: "1.0.0"
 slug: cooper_guardian
-description: Claude home agent — routes each request: answers, acts, or authors native HA automations.
+description: "Claude home agent that routes each request — answers, acts, or authors native HA automations."
 url: https://github.com/kunalkhosla/cooper
 arch:
   - aarch64
