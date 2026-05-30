@@ -194,6 +194,16 @@ async function refreshPaused(): Promise<void> {
   if (st) paused = st.state === "on";
 }
 
+// Render log timestamps in the home's local time: adopt HA's configured timezone as the process TZ
+// (the Supervisor usually already does this for add-ons; this makes it reliable standalone too).
+async function adoptHomeTimezone() {
+  try {
+    const tz = (await ha.config()).time_zone as string | undefined;
+    if (tz && tz !== process.env.TZ) { process.env.TZ = tz; log(`${C.gray}log timezone → ${tz}${C.reset}`); }
+  } catch { /* keep container default */ }
+}
+adoptHomeTimezone();
+
 // Self-provision the kill-switch (input_boolean.cooper_pause) on first run and sync `paused`.
 async function provisionKillSwitch() {
   try {

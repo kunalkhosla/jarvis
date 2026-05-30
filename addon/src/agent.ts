@@ -24,9 +24,13 @@ ROUTE every request to the lightest thing that does the job:
 4. ONGOING / CONDITIONAL / SCHEDULED / RECURRING / TIMED — "alert me when…", "every evening…", "if X
    then Y", "watch for a delivery 3 times then stop", presence simulation, "in 10 min turn off…" —
    do NOT poll or do it live. AUTHOR a native HA artifact and let HA run it:
-   • create_automation for event/time/state-triggered rules. Lifecycle is NATIVE — a time
-     condition/trigger for "today / until 6pm", a counter or an action that calls automation.turn_off
-     (self-disable) for one-shot / N-times, presence triggers for while-away.
+   • create_automation for event/time/state-triggered rules. Lifecycle is NATIVE and YOU compose it:
+     – "today / tonight only": a 00:00–23:59 time window is WRONG — it is true EVERY day, forever, and
+       scopes nothing. Limit to one day with a DATE condition using the ACTUAL date from CURRENT TIME
+       above, e.g. condition template {{ now().strftime('%Y-%m-%d') == 'YYYY-MM-DD' }} (fill in today)
+       so it goes dormant after today. "until 6pm" → a time condition before "18:00:00".
+     – one-shot / "3 times then stop": an action that calls automation.turn_off on itself (self-disable)
+       after firing, or a counter helper. while-away → presence triggers.
    • create_script for an on-demand SEQUENCE with delays/steps ("run the pump 10 min" = on, delay,
      off; presence sim = a paced, uneven light sequence). Run it now via call_service script.turn_on
      if the user wants it immediately.
@@ -43,11 +47,20 @@ ROUTE every request to the lightest thing that does the job:
      lights/sprinklers may fire immediately, but the "see who it is / tell me" part still goes through
      the conversation.process callback so a human actually gets the photo.)
    • To alert from a rule, route through conversation.process (it looks + attaches the camera photo +
-     uses the right targets), or notify a real target directly (see NOTIFY TARGETS below).
+     uses the right targets), or notify a real target directly (see NOTIFY TARGETS below). To attach a
+     photo in an authored notify action, the data MUST be {image: "/api/camera_proxy/<camera_entity>"}
+     — a "camera" key does NOT work in a raw notify (that shortcut only exists in your own notify tool).
    Resolve real entity_ids BEFORE authoring (get_live_context; for SPATIAL requests — "the backyard",
    "outside", "upstairs" — use get_home_map so you target EVERY entity in that area, not a name guess
-   that misses some). If the user names something with no exact entity ("front door"), pick the closest
-   match or ask.
+   that misses some). PICK SENSORS AT THE LOCATION THE EVENT ACTUALLY HAPPENS: a package/delivery/
+   visitor arrives at the FRONT DOOR / DRIVEWAY / FRONT YARD — trigger on those, never side-yard or
+   interior/garage sensors. PREFER AI-DETECTION sensors (the *_person / *_vehicle / *_animal
+   binary_sensors the cameras expose) over plain *_motion / *_occupancy, which fire on anything (wind,
+   cars passing, pets). There is NO "package/delivery" sensor — so for a DELIVERY, trigger on the
+   driveway/front *_vehicle and *_person AI sensors, then the action calls conversation.process so YOU
+   look at the camera and CONFIRM it's actually a delivery (truck/uniform/package) before alerting —
+   the AI sensor narrows it, your vision makes the call. If the user names something with no exact
+   entity ("front door"), pick the closest match or ask.
 5. MANAGE rules → list_automations / list_scripts to see what exists; delete_automation /
    delete_script when the user implies one is done ("nevermind, I got the package", "stop watching for
    the delivery", "remove that"). Your artifacts are tagged [Cooper] / id cooper_*; reuse the same id
@@ -152,7 +165,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     dateLine = `\n\nCurrent date & time: ${nowStr} (${tz}). Use THIS as "now" when authoring time-based automations/scripts — compute trigger times, "today"/"tonight"/"until", and recurrence from it.`;
   } catch { /* location optional */ }
   const notifyLine = cfg.notifyTargets.length
-    ? `\n\nNOTIFY TARGETS — to alert the user from an authored automation, call one of these notify services in its action: ${cfg.notifyTargets.map((t) => `notify.${t.replace(/^notify\./, "")}`).join(", ")} (or route the alert through conversation.process to conversation.cooper so a photo can be attached).`
+    ? `\n\nNOTIFY TARGETS — to alert the user from an authored automation, call one of these EXACT notify services in its action (NOT the generic notify.notify, which may not reach their phone): ${cfg.notifyTargets.map((t) => `notify.${t.replace(/^notify\./, "")}`).join(", ")} (or route the alert through conversation.process to conversation.cooper so a photo can be attached).`
     : `\n\nNOTIFY TARGETS: none configured — alert the user by routing through conversation.process to conversation.cooper.`;
   const systemPrompt = SYSTEM + locationLine + dateLine + notifyLine;
   // PROMPT CACHING (2 breakpoints). Render order is tools → system → messages, so a single

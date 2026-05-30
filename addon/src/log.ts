@@ -7,7 +7,9 @@ export const C = {
   think: "\x1b[35m", // magenta — Cooper's reasoning (basic ANSI; 256-color violet wasn't rendered by HA's log viewer)
 };
 
-const stamp = () => `${C.gray}[cooper ${new Date().toISOString()}]${C.reset}`;
+// Local-time stamp (sv-SE → "2026-05-30 14:23:45"), honoring process.env.TZ which index.ts sets from
+// HA's configured timezone at boot — so the Log tab reads in the user's local time, not UTC.
+const stamp = () => `${C.gray}[cooper ${new Date().toLocaleString("sv-SE")}]${C.reset}`;
 
 /** Timestamped log line. */
 export const L = (m: string) => console.log(`${stamp()} ${m}`);

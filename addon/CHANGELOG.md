@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.1
+- **Log timestamps are now in your local timezone** (adopted from HA's configured timezone at boot)
+  instead of UTC.
+- **Better authored rules — fixes found in live testing:**
+  - **"today / tonight" actually scopes to today.** A `00:00–23:59` time window is true *every* day
+    forever and scopes nothing; Cooper now uses a date condition built from the current date so the rule
+    goes dormant after today.
+  - **AI detection over plain motion.** For who/what-specific watches (a person, a delivery, a car),
+    Cooper triggers on the cameras' `*_person` / `*_vehicle` / `*_animal` AI sensors rather than plain
+    `*_motion` / `*_occupancy` (which fire on wind, passing cars, pets). Since there's no "package"
+    sensor, a *delivery* watch triggers on driveway/front vehicle+person and then calls back to Cooper
+    to visually confirm it's actually a delivery.
+  - **Watches the right place.** Deliveries/visitors trigger on front-door/driveway/front-yard sensors,
+    not side-yard or interior/garage.
+  - **Photos actually attach.** Authored notify actions use `data: {image: "/api/camera_proxy/<cam>"}`
+    (a bare `camera:` key is ignored by the app), and prefer your specific notify targets over the
+    generic `notify.notify`.
+
 ## 1.1.0
 - **Area-awareness — Cooper now knows the home's layout.** It reads HA's area registry, tags every
   entity in `get_live_context` with its area, and has a new `get_home_map` tool (areas → their
