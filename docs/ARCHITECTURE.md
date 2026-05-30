@@ -35,11 +35,6 @@ Two things live in this layer because they're conversational, not agentic:
 Forwarding `device_id` / `user_id` gives the add-on **caller context**: when you say "ping me,"
 Cooper targets *your* phone, not a hardcoded device.
 
-> This replaced an earlier bridge — a stock LLM conversation agent forwarding requests to the
-> guardian through an "Ask Cooper" script + `input_text` mailbox. A live stress test showed the
-> mailbox caused cross-request answer bleed, 255-char truncation, and faithfulness drift; the direct
-> streaming integration removes all three structurally.
-
 **Optional local fast-path:** enable HA's *"prefer handling commands locally"* and expose your core
 entities to Assist — HA then resolves simple commands ("turn off the kitchen lights") with its local
 intent engine in milliseconds, falling through to Cooper only for anything conversational, ambiguous,
