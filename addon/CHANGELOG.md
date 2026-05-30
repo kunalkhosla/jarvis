@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.25.0
+- **Watch intent is agent-classified now (watch-engine v2, part 1 — #9).** Removed the keyword regex
+  that decided watch-vs-not — it mis-fired both ways: it *missed* "if you see motion, notify me" (ran
+  once, no watch, then falsely claimed to be watching), and it *created a persistent watch from the
+  question* "any movements from last night's watch?" (the word "watch"). The agent now reads intent and
+  calls `start_watch` to set up monitoring; a question is just answered. "Stop watching" stays
+  deterministic (never depends on an LLM call).
+- **Watches have a mode (part 2 — supersedes #8).** `start_watch` takes `mode`: **event** (react to a
+  specific trigger — no idle polling) or **periodic** (open-ended oversight — also re-checks on a
+  timer). The agent infers it from intent and asks if unclear. **Event/reactive watches skip the
+  heartbeat**, so a "notify me if motion" watch stays idle until its events fire instead of burning the
+  cost-guard budget every `heartbeat_seconds` (which could otherwise starve real event evals). New
+  `reactive` column on goals (migrated in place).
+- Not yet: an event still evals *every* watch (O(events × watches) fan-out) — trigger-scoped evals,
+  tiered cheap-filter-then-judge, and prioritized backpressure are the next parts of #9.
+
 ## 0.24.0
 - **Cooper sets up its own watches now — no more missed intent or false "I'm watching".** Previously a
   deterministic keyword regex decided watch-vs-one-shot; phrasings like *"if you see motion on any

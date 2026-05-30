@@ -28,8 +28,12 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
 - ONGOING MONITORING: a single reply does NOT keep watching. If the user wants continuous monitoring
   or conditional alerting — "keep an eye on…", "if/when you see/detect X, notify me", "let me know
   if…", "while I'm asleep/away/out, watch…" — you MUST call start_watch with a self-contained goal
-  (what to watch + when to alert). NEVER say you're "watching", "monitoring", or "will alert you"
-  unless you actually called start_watch this turn; otherwise nothing persists.
+  (what to watch + when to alert). Pick mode: 'event' for a specific trigger (alert WHEN X happens —
+  reacts to events, no idle polling) or 'periodic' for open-ended oversight ("keep an eye on the
+  house" — re-checks on a timer too); ASK if it's genuinely unclear. NEVER say you're "watching",
+  "monitoring", or "will alert you" unless you actually called start_watch this turn. A QUESTION about
+  the past or current state ("did anything happen last night?", "is the door open?") is NOT a watch —
+  just answer it; do not call start_watch.
 - STOP / STAND DOWN: to stop watching, cancel a watch, OR stop a running scheduled sequence (e.g. a
   multi-zone sprinkler run still in progress with more zones queued), you MUST call cancel_watch (omit
   "match" for everything, or pass a phrase to target some). Saying you stopped is NOT enough — watches
@@ -86,8 +90,8 @@ const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", required: ["message"], properties: { message: { type: "string" }, camera: { type: "string" }, priority: { type: "string", enum: ["normal", "high", "critical"] } } } },
   { name: "cancel_watch", description: "Stand down active watch-goals AND stop pending scheduled/timed sequences (e.g. a multi-zone sprinkler run still mid-sequence) so they stop running, re-checking, and firing future steps. Omit 'match' to cancel EVERYTHING; pass a phrase to target a subset. Call this whenever the user asks to stop watching, stop/cancel a running sequence, remove a watch, or stand down.",
     input_schema: { type: "object", properties: { match: { type: "string" } } } },
-  { name: "start_watch", description: "Set up a PERSISTENT background watch so the guardian keeps checking the home and ALERTS the user on relevant events until cancelled. Use whenever the user wants ongoing monitoring or conditional alerting: 'keep an eye on…', 'if/when you see/detect X, notify me', 'let me know if…', 'while I'm asleep/away, watch…'. Pass a self-contained `goal` describing WHAT to watch and WHEN/how to alert. Without this, a single reply does nothing ongoing — so call it rather than just claiming you'll watch.",
-    input_schema: { type: "object", required: ["goal"], properties: { goal: { type: "string" } } } },
+  { name: "start_watch", description: "Set up a PERSISTENT background watch so the guardian keeps checking the home and ALERTS the user until cancelled. Use whenever the user wants ongoing monitoring or conditional alerting: 'keep an eye on…', 'if/when you see/detect X, notify me', 'let me know if…', 'while I'm asleep/away, watch…'. Pass a self-contained `goal` (WHAT to watch + WHEN/how to alert). Choose `mode`: 'event' for a specific trigger (alert WHEN X happens — reacts to events, no idle polling, cheaper) or 'periodic' for open-ended oversight ('keep an eye on the house' — also re-checks on a timer). If you genuinely can't tell which the user wants, ASK before calling. A QUESTION about the past/current state is NOT a watch — just answer it.",
+    input_schema: { type: "object", required: ["goal", "mode"], properties: { goal: { type: "string" }, mode: { type: "string", enum: ["event", "periodic"] } } } },
   { name: "finish", description: "End: summarize what you did / decided.",
     input_schema: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } } },
 ];
@@ -115,9 +119,10 @@ export interface Hooks {
   requestConfirm?: (domain: string, service: string, data: Record<string, unknown>, reason: string) => string;
   /** Stand down watch-goals AND stop pending scheduled sequences. Omit match for all; pass a phrase to target a subset. */
   cancelWatches?: (match?: string) => string;
-  /** Register a PERSISTENT watch-goal (ongoing monitoring / conditional alerting). Returns confirmation.
+  /** Register a PERSISTENT watch-goal (ongoing monitoring / conditional alerting). `mode`: 'event'
+   *  (react to triggers, no heartbeat) or 'periodic' (also re-check on a timer). Returns confirmation.
    *  Only present on the conversation path — autonomous evals can't spawn watches. */
-  startWatch?: (goal: string) => string;
+  startWatch?: (goal: string, mode?: "event" | "periodic") => string;
   /** Persist + schedule a timed action sequence (validated, auto-tier steps). The host fires due steps
    *  on a tick — survives restarts, shows in /healthz, and is cancelable as a unit. Returns a summary. */
   scheduleSequence?: (label: string, steps: Array<{ afterSeconds: number; domain: string; service: string; data?: Record<string, unknown>; note?: string }>) => string;
@@ -195,8 +200,9 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
       }
       else if (t.name === "start_watch") {
         const wg = String(a.goal ?? "").trim() || goal;
-        out = hooks?.startWatch ? hooks.startWatch(wg) : "cannot create a persistent watch in this context";
-        L(`    ${C.cyan}👁 start_watch -> ${out}${C.reset}`); log.push(out);
+        const mode = a.mode === "event" || a.mode === "periodic" ? a.mode : undefined;
+        out = hooks?.startWatch ? hooks.startWatch(wg, mode) : "cannot create a persistent watch in this context";
+        L(`    ${C.cyan}👁 start_watch(${mode ?? "?"}) -> ${out}${C.reset}`); log.push(out);
       }
       else if (t.name === "get_live_context") {
         const ents = await ha.liveContext(a.domains);

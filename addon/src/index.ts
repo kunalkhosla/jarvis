@@ -68,7 +68,7 @@ createServer(async (req, res) => {
     const standing = wantsStandingWhileAway(text);
     const g: Goal = isWatch
       ? store.addGoal(text, now, 0, expMs, wantsPresenceStandDown(text), standing) // persisted (gets a real rowid)
-      : { id: tmpId--, text, type: "do", created: now, lastRun: 0, expires: null, untilPresent: false, sawAway: false, whileAway: false }; // transient one-shot
+      : { id: tmpId--, text, type: "do", created: now, lastRun: 0, expires: null, untilPresent: false, sawAway: false, whileAway: false, reactive: false }; // transient one-shot
     goals.push(g);
     if (standing) { // dormant until everyone's out; checkPresence arms it
       header(`🏡 standing while-away watch registered (#${g.id}): "${text}"`);
@@ -148,9 +148,10 @@ function interesting(entityId: string, st: EntityState): boolean {
   return WATCH_DOMAINS.has(domain);
 }
 
-const WATCH_INTENT = /\b(watch|keep an eye|monitor|guard|look after|alert me|notify me if|let me know if|keep watch)\b/i;
-// Stop/stand-down intent. Checked BEFORE WATCH_INTENT (the word "watch" appears in both "watch the
-// cameras" and "stop watching") — deterministic, no LLM, so turning watches off always works.
+// Stop/stand-down intent — deterministic, no LLM, so turning watches off always works. (Watch
+// CREATION is agent-classified via start_watch; a keyword regex for that mis-fired both ways —
+// missed "if you see motion notify me", and created a watch from the question "last night's watch?"
+// — see #9. Stop stays deterministic so "stop watching" can never depend on an LLM call.)
 const STOP_INTENT = /\b(stop|cancel|remove|delete|clear|disable|end|quit|turn\s*off|forget)\b[^.]{0,24}\b(watch|watching|watches|monitor|monitoring|keeping an eye|guard)\b|\bstand[\s-]?down\b/i;
 const PAUSE_SWITCH = "input_boolean.cooper_pause"; // kill-switch: ON = halt all device actions
 const notifyAll = (msg: string) => { for (const tgt of cfg.notifyTargets) ha.notify(tgt, "Cooper", msg).catch(() => {}); };
@@ -287,15 +288,17 @@ const hooks: Hooks = {
 // Register a PERSISTENT watch-goal from a conversation (the agent's start_watch tool). The current
 // conversation eval already established the baseline, so there's no separate initial eval — the watch
 // engine takes over on future events. lastRun=now so it doesn't immediately re-fire.
-function registerWatch(goalText: string): string {
+function registerWatch(goalText: string, mode: "event" | "periodic" = "periodic"): string {
   const now = Date.now();
   const text = goalText.trim();
-  const g = store.addGoal(text, now, now, parseExpiry(text, now), wantsPresenceStandDown(text), wantsStandingWhileAway(text));
+  const reactive = mode === "event"; // event = react to relevant events only, no periodic heartbeat
+  const g = store.addGoal(text, now, now, parseExpiry(text, now), wantsPresenceStandDown(text), wantsStandingWhileAway(text), reactive);
   goals.push(g);
-  header(`👁 watch registered (start_watch) #${g.id}: "${text}"${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.whileAway ? " [standing while-away]" : ""}`);
-  store.logAction(now, g.id, "watch:create", text);
+  header(`👁 watch registered (start_watch, ${mode}) #${g.id}: "${text}"${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.whileAway ? " [standing while-away]" : ""}`);
+  store.logAction(now, g.id, "watch:create", `[${mode}] ${text}`);
   if (g.whileAway) checkPresenceStandDown(now).catch(() => {});
-  return `Watch #${g.id} is now active — I'll re-check on relevant events and alert you until you say stop${g.expires ? ` (expires ${new Date(g.expires).toLocaleString()})` : ""}.`;
+  const how = reactive ? "I'll alert you the moment it happens" : "I'll check in periodically and on relevant events";
+  return `Watch #${g.id} is active — ${how}, until you say stop${g.expires ? ` (expires ${new Date(g.expires).toLocaleString()})` : ""}.`;
 }
 
 // ---- Single entrypoint for a user utterance (stop / watch / do) → reply text ----
@@ -337,7 +340,7 @@ async function handleUtterance(text: string, history?: Turn[], session?: string)
   const histCtx = history && history.length
     ? `\n\nRecent conversation (for context / pronoun resolution — newest last):\n${history.map((h) => `${h.role}: ${h.text}`).join("\n")}`
     : "";
-  // Stop/stand-down — deterministic, no LLM. Must win over WATCH_INTENT ("watch" is in both).
+  // Stop/stand-down — deterministic, no LLM, so "stop watching" never depends on an LLM call.
   if (STOP_INTENT.test(text)) {
     const { n } = removeWatches(tnow);
     const s = cancelScheduled();
@@ -345,21 +348,13 @@ async function handleUtterance(text: string, history?: Turn[], session?: string)
     store.logAction(tnow, null, "ask:stop", text);
     return n || s ? `Stopped ${n} watch${n !== 1 ? "es" : ""} and ${s} scheduled sequence${s !== 1 ? "s" : ""}.` : "Nothing active to stop.";
   }
-  const isWatch = wantsStandingWhileAway(text) || wantsPresenceStandDown(text) || WATCH_INTENT.test(text);
-  if (isWatch) {
-    const g = store.addGoal(text, tnow, tnow, parseExpiry(text, tnow), wantsPresenceStandDown(text), wantsStandingWhileAway(text));
-    goals.push(g);
-    header(`📥 watch: "${text}" (#${g.id})${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.untilPresent ? " [until home]" : ""}${g.whileAway ? " [standing while-away]" : ""}`);
-    store.logAction(g.created, g.id, "watch:create", text);
-    if (g.whileAway) { checkPresenceStandDown(tnow).catch(() => {}); return `Standing watch set: "${text}". I'll arm whenever everyone's out.`; }
-    try { return await runGoal(cfg, ha, text, `(initial check — establish what's normal)${histCtx}`, budget, askHooks); }
-    catch (e) { log(`   ${C.red}watch intake error: ${e}${C.reset}`); return `Couldn't set that watch up: ${e}`; }
-  }
-  // Any non-watch request → run it now (control / schedule / answer) and report the result back.
+  // Everything else: one agent eval. The agent CLASSIFIES intent itself — it answers/acts, and calls
+  // start_watch to set up ongoing monitoring (no brittle keyword regex deciding watch-vs-not, which
+  // mis-fired both ways: missed "if you see motion notify me", and made a watch from the question
+  // "last night's watch?"). start_watch is wired ONLY here (a conversation turn) — never on autonomous
+  // /watch-engine evals — so a watch eval can't spawn nested watches.
   header(`📥 request: "${text}"`);
   store.logAction(tnow, null, "ask:do", text);
-  // start_watch is offered ONLY here (a conversation do-turn) — never on autonomous/watch-engine evals,
-  // so a watch eval can't spawn nested watches.
   const doHooks: Hooks = { ...askHooks, startWatch: registerWatch };
   try {
     return await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${histCtx}`, budget, doHooks);
@@ -493,10 +488,12 @@ async function processBuffer() {
 }
 
 // ---- Heartbeat: periodic safety re-check of watch-goals (in case events were missed) ----
+// Skips REACTIVE (event-only) watches — those wake on their events via processBuffer and must not
+// burn the cost-guard budget idling (a heartbeat eval is as droppable as a real event eval otherwise).
 setInterval(async () => {
   const now = Date.now();
   reapExpired(now); await checkPresenceStandDown(now);
-  for (const g of goals.filter((x) => x.type === "watch" && now - x.lastRun > COOLDOWN_MS && (!x.whileAway || armed.get(x.id)))) {
+  for (const g of goals.filter((x) => x.type === "watch" && !x.reactive && now - x.lastRun > COOLDOWN_MS && (!x.whileAway || armed.get(x.id)))) {
     if (!budget.canRun(now).ok) { log(`${C.yellow}💸 skip heartbeat — ${budget.canRun(now).reason}${C.reset}`); break; }
     g.lastRun = now; store.touchGoal(g.id, now);
     header(`⏱ HEARTBEAT eval #${g.id}`);
