@@ -11,6 +11,11 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
 - PAST vs NOW: get_live_context is the CURRENT moment ONLY. For anything that ALREADY happened
   ("what happened overnight", "any motion earlier", "was the garage opened today") use get_history —
   never answer a question about the past from current state.
+- FUTURE vs PAST — don't confuse setting up a watch with looking one up. "if/when you see X, notify
+  me" / "watch for X (today)" / "let me know if X happens" = FORWARD-looking → call start_watch, even
+  if X hasn't occurred yet and even if there's no exact sensor named X (watch the closest cameras, or
+  ask which). NEVER answer a forward "if you see…" request by checking get_history and replying
+  "nothing yet / no alerts needed". "did you see X?" / "any X earlier?" = BACKWARD → get_history.
 - Act via call_service. Reversible actions (lights/fans/media/climate) run automatically; risky
   ones (locks, alarm, valve, garage/awning close, sirens) need confirmation — call_service sends the
   user a Yes/No on their phone and returns "Asked the user to confirm…" (it runs only if they tap
@@ -136,6 +141,7 @@ export interface Hooks {
 export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget, hooks?: Hooks): Promise<string> {
   const anthropic = new Anthropic({ apiKey: cfg.anthropicKey });
   const log: string[] = [];
+  let lastConfirmation = ""; // most recent user-facing action result, used as a fallback reply if the agent ends with no text
   const messages: Anthropic.MessageParam[] = [
     { role: "user", content: `GOAL: ${goal}${extraContext ? `\n\n${extraContext}` : ""}` },
   ];
@@ -192,7 +198,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     const u = res.usage as Anthropic.Usage & { cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
     L(`  ${C.gray}step ${step}: ${toolUses.length} tool call(s) [stop_reason=${res.stop_reason}] tok in=${u.input_tokens} out=${u.output_tokens} cache(w=${u.cache_creation_input_tokens ?? 0} r=${u.cache_read_input_tokens ?? 0})${C.reset}`);
     // No client tool calls → Claude has answered directly (text). Return that.
-    if (toolUses.length === 0) return textOf(res.content) || "(no response)";
+    if (toolUses.length === 0) return textOf(res.content) || lastConfirmation || "Okay — done.";
 
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const t of toolUses) {
@@ -200,13 +206,15 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
       let out = "";
       if (t.name === "finish") { L(`${C.green}${C.bold}✔ finish:${C.reset}${C.green} ${a.summary}${C.reset}`); return a.summary; }
       else if (t.name === "cancel_watch") {
-        out = hooks?.cancelWatches ? hooks.cancelWatches(typeof a.match === "string" ? a.match : undefined) : "cannot cancel watches in this context";
+        if (hooks?.cancelWatches) { out = hooks.cancelWatches(typeof a.match === "string" ? a.match : undefined); lastConfirmation = out; }
+        else out = "cannot cancel watches in this context";
         L(`    ${C.yellow}🛑 cancel_watch(${a.match ?? "all"}) -> ${out}${C.reset}`); log.push(out);
       }
       else if (t.name === "start_watch") {
         const wg = String(a.goal ?? "").trim() || goal;
         const mode = a.mode === "event" || a.mode === "periodic" ? a.mode : undefined;
-        out = hooks?.startWatch ? hooks.startWatch(wg, mode) : "cannot create a persistent watch in this context";
+        if (hooks?.startWatch) { out = hooks.startWatch(wg, mode); lastConfirmation = out; }
+        else out = "cannot create a persistent watch in this context";
         L(`    ${C.cyan}👁 start_watch(${mode ?? "?"}) -> ${out}${C.reset}`); log.push(out);
       }
       else if (t.name === "get_live_context") {
@@ -312,7 +320,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         else if (pr === "critical" || pr === "emergency") // bypass silent/DND, sound the alarm channel
           Object.assign(data, { importance: "high", priority: "high", ttl: 0, channel: "alarm_stream" });
         if (!cfg.notifyTargets.length) out = "[no notify_targets configured] " + a.message;
-        else { try { for (const tgt of cfg.notifyTargets) await ha.notify(tgt, "Cooper", a.message, data); out = `notified[${pr}]` + (data.image ? " (+photo)" : ""); } catch (e) { out = `notify failed: ${String(e).slice(0, 150)}`; } }
+        else { try { for (const tgt of cfg.notifyTargets) await ha.notify(tgt, "Cooper", a.message, data); out = `notified[${pr}]` + (data.image ? " (+photo)" : ""); lastConfirmation = a.message; } catch (e) { out = `notify failed: ${String(e).slice(0, 150)}`; } }
         L(`    ${C.magenta}📲 notify[${pr}]${data.image ? " 📸" : ""} -> ${out}${C.reset}`); log.push(out);
       } else if (t.name === "call_service") {
         const ids: string[] = [a.data?.entity_id].flat().filter(Boolean);

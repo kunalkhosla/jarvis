@@ -30,7 +30,7 @@ createServer(async (req, res) => {
   if (req.url === "/healthz")
     return json(200, {
       ok: true, observe: cfg.observeMode, budget: budget.stats(Date.now()),
-      goals: goals.map((g) => ({ id: g.id, type: g.type, text: g.text, expires: g.expires ? new Date(g.expires).toISOString() : null, untilHome: g.untilPresent || undefined, standing: g.whileAway || undefined, armed: g.whileAway ? (armed.get(g.id) || false) : undefined })),
+      goals: goals.map((g) => ({ id: g.id, type: g.type, text: g.text, mode: g.reactive ? "event" : "periodic", expires: g.expires ? new Date(g.expires).toISOString() : null, untilHome: g.untilPresent || undefined, standing: g.whileAway || undefined, armed: g.whileAway ? (armed.get(g.id) || false) : undefined })),
       tasks: tasks.map((t) => ({ id: t.id, text: t.text, runAt: t.runAt ? new Date(t.runAt).toISOString() : null, onArrival: t.onArrival })),
       sequences: [...new Set(seqSteps.map((s) => s.seqId))].map((id) => {
         const steps = seqSteps.filter((s) => s.seqId === id);
@@ -285,6 +285,20 @@ const hooks: Hooks = {
   },
 };
 
+// Framing for a WATCH ENGINE eval (processBuffer / heartbeat). The watch already exists — without this,
+// the agent re-reads the watch's monitoring-phrased text + the "call start_watch for monitoring" rule
+// and tries to RE-create the watch (which fails in this context and derails the eval). This tells it to
+// assess the triggering event and alert, never to set up a watch.
+const WATCH_EVAL_FRAME =
+  "MODE — WATCH EVALUATION: you are running an ALREADY-ACTIVE watch. The GOAL above is its standing " +
+  "instruction, NOT a request to create a watch. NEVER call start_watch or cancel_watch here. A relevant " +
+  "sensor just fired (see the events). look_at_camera the camera nearest the triggered sensor to SEE the " +
+  "scene, judge whether it matches the instruction, and notify ONLY if it genuinely does — otherwise finish " +
+  "with a brief 'nothing to report'. Focus on what fired; don't re-survey the whole home.";
+// Hooks for watch-engine evals: start_watch is redirected (the watch already exists) so a stray call
+// can't derail the eval with a "cannot create" error.
+const watchHooks: Hooks = { ...hooks, startWatch: () => "This watch is already active — do NOT create another; assess the current event and notify if warranted." };
+
 // Register a PERSISTENT watch-goal from a conversation (the agent's start_watch tool). The current
 // conversation eval already established the baseline, so there's no separate initial eval — the watch
 // engine takes over on future events. lastRun=now so it doesn't immediately re-fire.
@@ -356,8 +370,14 @@ async function handleUtterance(text: string, history?: Turn[], session?: string)
   header(`📥 request: "${text}"`);
   store.logAction(tnow, null, "ask:do", text);
   const doHooks: Hooks = { ...askHooks, startWatch: registerWatch };
+  // Tell the agent what's already being watched, so it can manage watches by natural language —
+  // e.g. "nevermind, I got the package" / "they arrived" → cancel_watch the matching one.
+  const activeWatches = goals.filter((g) => g.type === "watch");
+  const watchCtx = activeWatches.length
+    ? `\n\nActive watches right now — if the user's message implies one is no longer needed ("nevermind", "I got the package", "they're here", "that's done", "stop the X one"), call cancel_watch with a phrase from that watch to stand it down:\n${activeWatches.map((g) => `#${g.id}: ${g.text}`).join("\n")}`
+    : "";
   try {
-    return await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${histCtx}`, budget, doHooks);
+    return await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${watchCtx}${histCtx}`, budget, doHooks);
   } catch (e) { log(`   ${C.red}request error: ${e}${C.reset}`); return `Sorry — I hit an error: ${e}`; }
 }
 
@@ -482,7 +502,7 @@ async function processBuffer() {
     if (!budget.canRun(now).ok) break;
     g.lastRun = now; store.touchGoal(g.id, now);
     header(`👁 WATCH eval #${g.id} (${events.length} event(s))`);
-    try { const r = await runGoal(cfg, ha, g.text, ctx, budget, hooks); store.logAction(now, g.id, "watch:eval", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
+    try { const r = await runGoal(cfg, ha, g.text, `${WATCH_EVAL_FRAME}\n\n${ctx}`, budget, watchHooks); store.logAction(now, g.id, "watch:eval", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
     catch (e) { log(`   ${C.red}watch goal #${g.id} error: ${e}${C.reset}`); }
   }
 }
@@ -497,7 +517,7 @@ setInterval(async () => {
     if (!budget.canRun(now).ok) { log(`${C.yellow}💸 skip heartbeat — ${budget.canRun(now).reason}${C.reset}`); break; }
     g.lastRun = now; store.touchGoal(g.id, now);
     header(`⏱ HEARTBEAT eval #${g.id}`);
-    try { const r = await runGoal(cfg, ha, g.text, "(periodic check — no specific event)", budget, hooks); store.logAction(now, g.id, "watch:heartbeat", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
+    try { const r = await runGoal(cfg, ha, g.text, `${WATCH_EVAL_FRAME}\n\n(periodic check — no specific event)`, budget, watchHooks); store.logAction(now, g.id, "watch:heartbeat", String(r).slice(0, 500)); log(`   ${C.green}→ ${r}${C.reset}`); }
     catch (e) { log(`   ${C.red}heartbeat goal #${g.id} error: ${e}${C.reset}`); }
   }
 }, Math.max(60, cfg.heartbeatSeconds) * 1000);

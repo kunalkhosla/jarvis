@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.27.0
+- **Watch evals no longer try to re-create themselves (the big fix).** A watch-engine eval re-read the
+  watch's own monitoring-phrased text + the "for monitoring intent, call start_watch" rule and tried to
+  set the watch up *again* — which fails inside an eval ("cannot create a persistent watch in this
+  context") and derailed the whole eval into rambling about HA automations instead of checking the
+  scene. Watch evals now run with an explicit frame ("you're running an ALREADY-ACTIVE watch — never
+  start_watch/cancel_watch; look at the camera that fired and notify only if it matches"), and a stray
+  `start_watch` in that context is redirected instead of erroring.
+- **Cooper knows what it's watching now — manage watches by voice.** Each conversation turn is given
+  the list of active watches, so "nevermind, I got the package" / "they're here" / "that's done"
+  cancels the matching watch via `cancel_watch` (previously the agent had no idea a watch existed and
+  just chatted back).
+- **Forward vs backward intent.** "if you see X, notify me" / "watch for X today" → `start_watch`
+  (forward); "did you see X?" / "any X last night?" → `get_history` (backward). Fixes a regression where
+  a forward "if you see a person at the door" request was answered by checking history ("no alerts
+  needed") instead of setting up the watch.
+- **No more "(no response)".** When the agent ends a turn with no text (e.g. right after `start_watch`),
+  `runGoal` now returns the last action confirmation instead of an empty reply.
+- `/healthz` reports each watch's `mode` (event | periodic).
+
 ## 0.26.0
 - **Cooper can answer "what happened?" now (#10).** New `get_history` tool queries HA state history
   over a window, so questions about the **past** ("any motion overnight?", "was the garage opened
