@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.2
+- **"Tonight" / overnight watches no longer cut off at midnight.** Authoring conflated "today" with
+  "tonight" and used a same-day date condition, so a "watch the front door tonight" rule stopped at
+  11:59pm — missing the small hours, when a late visitor matters most. Cooper now knows overnight spans
+  midnight and uses an overnight time window (e.g. 6pm→6am via `after` > `before`) instead of pinning to
+  one calendar date. "Today" (a full calendar day) still uses the date condition.
+
 ## 1.4.1
 - **Streamed progress is now spoken, not just shown.** The step statuses ended in "…", and HA's
   streaming TTS only speaks complete sentences — so progress appeared as text but stayed silent until
