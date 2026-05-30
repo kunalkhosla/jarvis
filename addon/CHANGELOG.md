@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.0
+- **v2 foundation — Cooper authors native HA automations.** New `create_automation` /
+  `list_automations` / `delete_automation` tools: Cooper writes real Home Assistant automations (via
+  the config API + reload) that HA runs natively — cheap triggers, survive restarts, visible/editable
+  in the Automations UI — instead of Cooper polling. For the smart step, an authored automation calls
+  `conversation.process` back to Cooper (`conversation.cooper`) to judge ("is this actually a
+  delivery?"). Cooper-authored automations are clearly tagged: **id prefixed `cooper_`, alias prefixed
+  `[Cooper] `**, and a description recording the request. Additive this release — the routing prompt and
+  removal of the old watch/do/sequence engine follow (this is step 1 of the v2 "routing agent over HA"
+  redesign).
+
 ## 0.27.0
 - **Watch evals no longer try to re-create themselves (the big fix).** A watch-engine eval re-read the
   watch's own monitoring-phrased text + the "for monitoring intent, call start_watch" rule and tried to

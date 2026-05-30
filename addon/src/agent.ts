@@ -102,6 +102,12 @@ const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: { match: { type: "string" } } } },
   { name: "start_watch", description: "Set up a PERSISTENT background watch so the guardian keeps checking the home and ALERTS the user until cancelled. Use whenever the user wants ongoing monitoring or conditional alerting: 'keep an eye on…', 'if/when you see/detect X, notify me', 'let me know if…', 'while I'm asleep/away, watch…'. Pass a self-contained `goal` (WHAT to watch + WHEN/how to alert). Choose `mode`: 'event' for a specific trigger (alert WHEN X happens — reacts to events, no idle polling, cheaper) or 'periodic' for open-ended oversight ('keep an eye on the house' — also re-checks on a timer). If you genuinely can't tell which the user wants, ASK before calling. A QUESTION about the past/current state is NOT a watch — just answer it.",
     input_schema: { type: "object", required: ["goal", "mode"], properties: { goal: { type: "string" }, mode: { type: "string", enum: ["event", "periodic"] } } } },
+  { name: "create_automation", description: "Author a NATIVE Home Assistant automation for anything ongoing, conditional, scheduled, or recurring ('alert me when…', 'every evening…', 'if X then Y', 'watch for… 3 times then stop'). HA runs it natively (cheap triggers, survives restarts, visible/editable in the user's Automations UI) — far better than you polling. `id` is a stable slug (prefix 'cooper_'); `config` is the automation body: {alias, trigger:[...], condition?:[...], action:[...], mode?}. Lifecycle is native: time conditions/triggers for 'today'/'until', a counter or `automation.turn_off` (self-disable) for one-shot / N-times. For the SMART step (e.g. 'is this actually a delivery?', looking at a camera), make an action call service `conversation.process` with data {agent_id:'conversation.cooper', text:'<instruction telling Cooper to look and decide and notify>'} — the automation thus calls you back to judge on each real trigger. Resolve real entity_ids first with get_live_context.",
+    input_schema: { type: "object", required: ["id", "config"], properties: { id: { type: "string" }, config: { type: "object" } } } },
+  { name: "list_automations", description: "List existing automations (entity_id, config id, alias, on/off) — use before editing/deleting, or to answer 'what are you watching for / what automations do I have'.",
+    input_schema: { type: "object", properties: {} } },
+  { name: "delete_automation", description: "Delete an automation by its config `id` (from list_automations). Use when the user says a rule is no longer needed ('stop watching for the delivery', 'nevermind', 'remove that').",
+    input_schema: { type: "object", required: ["id"], properties: { id: { type: "string" } } } },
   { name: "finish", description: "End: summarize what you did / decided.",
     input_schema: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } } },
 ];
@@ -209,6 +215,33 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         if (hooks?.cancelWatches) { out = hooks.cancelWatches(typeof a.match === "string" ? a.match : undefined); lastConfirmation = out; }
         else out = "cannot cancel watches in this context";
         L(`    ${C.yellow}🛑 cancel_watch(${a.match ?? "all"}) -> ${out}${C.reset}`); log.push(out);
+      }
+      else if (t.name === "create_automation") {
+        // Enforce a clear Cooper convention regardless of what the model passed: id prefix `cooper_`,
+        // alias prefix `[Cooper] `, and a description recording the request — so it's unmistakable in
+        // the user's Automations UI and Cooper can find/manage its own.
+        let id = String(a.id ?? "").trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "") || `rule_${Date.now()}`;
+        if (!id.startsWith("cooper_")) id = `cooper_${id}`;
+        const cfg2 = { ...(a.config && typeof a.config === "object" ? a.config : {}) } as Record<string, unknown>;
+        const rawAlias = String(cfg2.alias ?? id).replace(/^\[Cooper\]\s*/i, "").trim();
+        cfg2.alias = `[Cooper] ${rawAlias}`;
+        cfg2.id = id;
+        cfg2.description = `Created by Cooper. Request: ${goal}`.slice(0, 255);
+        try { await ha.upsertAutomation(id, cfg2); out = `created automation ${id} ("${cfg2.alias}")`; lastConfirmation = `Set it up — automation "${cfg2.alias}" is live.`; }
+        catch (e) { out = `ERROR creating automation: ${String(e).slice(0, 200)}`; }
+        L(`    ${C.cyan}🤖 create_automation(${id}) -> ${out}${C.reset}`); log.push(out);
+      }
+      else if (t.name === "list_automations") {
+        const all = await ha.automations();
+        const mine = all.filter((x) => (x.id ?? "").startsWith("cooper_") || x.alias.startsWith("[Cooper]"));
+        out = JSON.stringify((mine.length ? mine : all).map((x) => ({ id: x.id, alias: x.alias, state: x.state, cooper: (x.id ?? "").startsWith("cooper_") || x.alias.startsWith("[Cooper]") })));
+        L(`    ${C.cyan}🤖 list_automations -> ${all.length} total, ${mine.length} cooper${C.reset}`); log.push(`listed ${all.length} automations`);
+      }
+      else if (t.name === "delete_automation") {
+        const id = String(a.id ?? "").trim();
+        if (!id) out = "no id given";
+        else { try { await ha.deleteAutomation(id); out = `deleted automation ${id}`; lastConfirmation = "Removed that automation."; } catch (e) { out = `ERROR deleting: ${String(e).slice(0, 200)}`; } }
+        L(`    ${C.cyan}🤖 delete_automation(${id}) -> ${out}${C.reset}`); log.push(out);
       }
       else if (t.name === "start_watch") {
         const wg = String(a.goal ?? "").trim() || goal;

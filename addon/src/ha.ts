@@ -65,6 +65,25 @@ export class HaClient {
   /** POST to an HA config endpoint (e.g. /config/script/config/<id>) — used for self-provisioning. */
   postConfig = (path: string, body: unknown) => this.rest(path, { method: "POST", body: JSON.stringify(body) });
 
+  // ---- Native HA automations (Cooper authors these; HA's engine runs them) ----
+  /** Create or replace an automation by id, then reload so it's live. `config` is the automation
+   *  body (alias, trigger, condition?, action, mode?). HA stores it in automations.yaml. */
+  async upsertAutomation(id: string, config: Record<string, unknown>): Promise<void> {
+    await this.rest(`/config/automation/config/${id}`, { method: "POST", body: JSON.stringify(config) });
+    await this.callService("automation", "reload");
+  }
+  /** Delete an automation's config by id, then reload. */
+  async deleteAutomation(id: string): Promise<void> {
+    await this.rest(`/config/automation/config/${id}`, { method: "DELETE" });
+    await this.callService("automation", "reload");
+  }
+  /** List automations (entity_id, the config `id` for edit/delete, friendly alias, on/off state). */
+  async automations(): Promise<Array<{ entity_id: string; id: string | undefined; alias: string; state: string }>> {
+    return (await this.getStates())
+      .filter((s) => s.entity_id.startsWith("automation."))
+      .map((s) => ({ entity_id: s.entity_id, id: s.attributes?.id as string | undefined, alias: (s.attributes?.friendly_name as string) ?? s.entity_id, state: s.state }));
+  }
+
   /** HA's own weather forecast for the home's exact location. Discovers the weather entity by
    *  DOMAIN (generic — no hardcoded entity names) and returns its forecast list. Beats web search,
    *  which reverse-geocodes coordinates to a nearby town and can be flat wrong. */
