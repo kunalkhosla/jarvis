@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.23.0
+- **The `input_text` voice bridge is gone.** Cooper is now reached only through the **Cooper
+  conversation integration** (`custom_components/cooper/`) over `POST /ask`. Removed: the
+  `cooper_watch_request` / `cooper_response` helpers, the self-provisioned **Ask Cooper** script, the
+  ~9s wait/reply logic, and the routing-prompt setup step. On first run the add-on now self-provisions
+  only the **kill-switch** (`input_boolean.cooper_pause`). *Migrating: delete the three orphaned
+  entities (`script.cooper_watch`, `input_text.cooper_watch_request`, `input_text.cooper_response`)
+  manually.* The autonomous **push** Yes/No confirmation path is retained (for a watch acting while no
+  conversation is open).
+- **F1 safety fix: scheduled sequences respect observe mode.** `fireDueSteps` now skips real
+  `ha.callService` when `observe_mode` is on (previously a scheduled presence-sim / multi-zone run
+  fired for real even in observe mode). With the in-chat-confirm observe fix in 0.22, observe mode is
+  now leak-free across immediate actions, confirmations, and scheduled sequences.
+
 ## 0.22.0
 - **In-chat confirmations.** A confirm-tier action (lock, alarm, valve, garage close, siren) raised
   during a conversation now asks a **yes/no right in the reply** and resolves on your next turn —

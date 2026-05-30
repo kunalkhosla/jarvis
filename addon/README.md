@@ -26,39 +26,31 @@ judgment, sees through your cameras, and knows when to ask first.
 
 ## Control surface
 - `GET /healthz` — status, active goals, scheduled tasks, live budget.
+- `POST /ask {"text": "...", "session_id": "...", "history"?: [{"role","text"}]}` → `{"reply"}` — one
+  conversation turn (stop/watch/do routing, runs synchronously, returns the spoken reply). This is what
+  the Cooper conversation integration calls; `session_id` carries in-chat confirmation continuity.
 - `POST /goal {"text": "...", "type": "watch"|"do", "expires"?, "run_at"?, "on_arrival"?}` — register
-  a goal. Watch/expiry/arrival triggers are also inferred from the text.
-- `DELETE /goal/:id` · `DELETE /task/:id` — cancel a watch-goal or a scheduled task.
+  a goal directly. Watch/expiry/arrival triggers are also inferred from the text.
+- `DELETE /goal/:id` · `DELETE /task/:id` · `DELETE /sequence/:id` — cancel a watch-goal, scheduled
+  task, or pending sequence.
 
-**Voice bridge:** on first run the add-on self-provisions a bridge — it creates two `input_text`
-helpers (a request and a response) + an **"Ask Cooper"** script and exposes it to Assist. The script
-hands the request to the guardian, then **waits briefly (~9s) for Cooper's reply** and returns it, so
-the assistant can speak quick answers inline; longer tasks time out with "On it — I'll notify you"
-and Cooper pushes the result. The script is re-written on every start, so updates apply automatically.
-(Uninstalling leaves the helpers/script behind — delete them manually for a clean removal.)
+**Talk to Cooper:** install the companion **Cooper conversation integration** (`custom_components/cooper/`
+— via HACS as a custom repository, or copy it to `/config/custom_components/`), restart HA, then
+**Settings → Devices & Services → Add Integration → Cooper** and point it at this add-on
+(`http://homeassistant.local:8099`; the form validates `/healthz`). Finally set **Cooper** as your
+Assist **conversation agent** (Settings → Voice assistants). Every utterance then goes straight to the
+guardian via `POST /ask` and the assistant speaks the reply — with conversation memory and in-chat
+confirmations. No script, no `input_text` mailbox, no routing prompt.
 
-**Required manual step — add this routing instruction to your conversation agent's prompt**
-(Settings → Devices & Services → your Anthropic Conversation agent → Instructions). Without it the
-phone won't reliably hand agentic requests to the guardian:
+On first run the add-on only self-provisions the **kill-switch** (`input_boolean.cooper_pause`).
 
-```
-For anything needing watching/monitoring, presence simulation, scheduling a timed sequence
-(e.g. sprinklers/irrigation across zones), camera vision, or any multi-step task, call the
-"Ask Cooper" script with the user's full request as `goal`.
+> **Migrating from ≤0.22?** The old bridge is gone. Delete the three orphaned helpers manually:
+> `script.cooper_watch`, `input_text.cooper_watch_request`, `input_text.cooper_response`. The
+> kill-switch stays.
 
-CRITICAL: you MUST actually CALL the "Ask Cooper" script in this turn. NEVER say "handed it to
-Cooper", "Cooper will do it", or "you'll get a notification" unless you actually invoked the
-script — if you only describe it, nothing happens. When unsure, call it.
-
-The script returns a "reply" — speak it back to the user verbatim (don't add to it). For quick
-requests that's Cooper's actual answer; for longer tasks it's an acknowledgement and Cooper
-notifies the result when done.
-
-Only handle simple one-shot device control and direct questions yourself.
-```
-
-Then by voice: *"Cooper, is the garage closed?"* gets a spoken answer back; *"Cooper, make it look
-like someone's home"* is acknowledged and the guardian acts and notifies the result.
+**Optional local fast-path:** to keep simple commands instant, enable Assist's *"prefer handling
+commands locally"* and expose your core entities — HA resolves those with its local intent engine and
+only falls through to Cooper for conversational, ambiguous, or multi-step requests.
 
 ## Config (add-on options; env for standalone dev)
 | Option | Env | Notes |

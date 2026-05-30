@@ -7,9 +7,10 @@ WAN-surviving, no separate host to maintain).
 > **Status:** both layers are live. Shipped since this plan was written: camera **vision**, a **cost
 > guard**, photo alerts with agent-chosen urgency, **time-boxed / presence-aware / standing**
 > watches, **deferred & arrival tasks**, **self-scheduled action sequences** (`schedule_actions`),
-> local-forecast weather, the **voice bridge** (talk to the guardian from the phone, self-
-> provisioned), and **ElevenLabs/TARS** TTS. See [the changelog](../addon/CHANGELOG.md). This file
-> is kept as the original plan + remaining roadmap.
+> local-forecast weather, **ElevenLabs/TARS** TTS, and the **Cooper conversation integration** —
+> Cooper registered directly as the HA conversation agent (with memory + in-chat confirmations),
+> replacing the earlier `input_text` voice bridge. See [the changelog](../addon/CHANGELOG.md). This
+> file is kept as the original plan + remaining roadmap.
 
 ## Phase 0 — Registry hygiene (HARD PREREQUISITE)
 

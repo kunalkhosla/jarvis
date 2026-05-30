@@ -13,26 +13,28 @@ fast-path + smart-path is the whole trick.
 
 ## Three layers
 
-### Layer 1 — Voice/chat front-end
-HA's **Assist** pipeline (wake word → STT → conversation agent → TTS) with the conversation agent
-set to **prefer local intents, fall back to Claude** (HA *Anthropic Conversation* integration).
-HA-config only — no service to host. Voice satellites (HA Voice PE / ESPHome, "Cooper" wake word)
-are an optional later add; text/app works day one. On Android, HA Assist can be set as the
-device's default assistant (replacing the stock one).
+### Layer 1 — Voice/chat front-end (Cooper *is* the conversation agent)
+HA's **Assist** pipeline (wake word → STT → conversation agent → TTS), with the conversation agent
+set to **Cooper** — a small custom integration (`custom_components/cooper/`) that registers the
+guardian directly as a Home Assistant conversation agent. Every utterance goes straight to Cooper
+over HTTP (`POST /ask` on the add-on); Cooper reasons, acts, and replies, and the assistant **speaks
+that reply inline**. One brain, a direct request/response — no second LLM, no script, no `input_text`
+mailbox. Conversation **memory** (follow-ups like "turn it off") and **in-chat confirmations**
+("Unlock the front door — yes or no?" → "yes") are native to this path. Cooper answers everything via
+its Layer-2 toolset: home control, status, local weather (`get_forecast`), camera vision, and live
+web facts (native `web_search`).
 
-**What the front-end answers** (when set as your phone assistant):
-- ✅ Home control, general knowledge, unit conversions, reasoning (Claude's own knowledge).
-- ✅ Local weather — from the HA weather entity (current + forecast), not a web lookup.
-- ✅ **Live web / real-time facts** (news, scores, "search the web") — via Anthropic's **native
-  `web_search`** server-tool, enabled on the HA *Anthropic Conversation* integration. No third-party
-  search key needed. This was the gate for replacing a stock cloud assistant on a phone — resolved.
+> This replaced an earlier two-layer bridge — a stock LLM conversation agent that forwarded agentic
+> requests to the guardian through an "Ask Cooper" script + `input_text` mailbox. A live stress test
+> showed the mailbox caused cross-request answer bleed, 255-char truncation, and faithfulness drift;
+> the direct integration removes all three structurally.
 
-The guardian (Layer 2) hands off from the phone via a lightweight **bridge** (an exposed "Ask
-Cooper" script → an `input_text` helper it watches), so anything agentic said to the phone routes
-to the guardian. The bridge is **synchronous when it can be**: the script blocks briefly (~9s)
-waiting for Cooper to write its reply to a second `input_text` helper, so the assistant **speaks
-Cooper's answer inline** for quick requests; longer agentic tasks time out gracefully ("On it —
-I'll notify you") and Cooper delivers the result by push when it's done.
+**Optional local fast-path:** enable HA's *"prefer handling commands locally"* and expose your core
+entities to Assist — HA then resolves simple commands ("turn off the kitchen lights") with its local
+intent engine in milliseconds and only falls through to Cooper for anything conversational, ambiguous,
+or multi-step. Without it, every utterance is a Cooper eval (a few seconds) — simpler setup, no local
+speed path. Voice satellites (HA Voice PE / ESPHome, "Cooper" wake word) are an optional add; text/app
+works day one. On Android, HA Assist can be the device's default assistant.
 
 ### Layer 2 — Guardian agent service (the novel core)
 A persistent, goal-driven Claude agent (an HA add-on). Goal shapes, one engine:
@@ -61,8 +63,8 @@ flowchart LR
     subgraph HA["Home Assistant (HAOS)"]
       direction TB
       ASSIST["Assist: STT/TTS"]
-      INTENT["Local intents ⚡"]
-      CONV["Claude conversation agent 🧠"]
+      INTENT["Local intents ⚡ (optional)"]
+      CONV["Cooper conversation agent<br/>(custom integration)"]
       WS[("WebSocket: state events")]
       REST[("REST API")]
       DEV["Devices & sensors<br/>(incl. cameras)"]
@@ -84,8 +86,7 @@ flowchart LR
     CLAUDE[["Anthropic API · Haiku→Sonnet/Opus"]]
     PHONE["📲 notify (+photo) / 🔊 TTS"]
 
-    CONV --> CLAUDE
-    CONV -.->|"hands off agentic requests (Ask Cooper bridge)"| TRIG
+    CONV -->|"POST /ask (every turn)"| LOOP
     LOOP -->|reason + vision| CLAUDE
     WS --> TRIG
     LOOP <-->|state · camera snapshots| REST

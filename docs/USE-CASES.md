@@ -50,8 +50,9 @@ calendars, weather, presence, media players, a water shutoff valve).
 - **Leave-soon** reminder from calendar + travel time.
 
 ## How you invoke them
-Just **say it to your phone** — the voice bridge hands the request to the guardian, which acts and
-notifies the result. (Or `POST /goal` for testing.) Watch alerts carry an agent-chosen urgency
+Just **say it to your phone** — with Cooper set as your Assist conversation agent, the request goes
+straight to the guardian, which acts and speaks the reply (or notifies you for longer tasks). (Or
+`POST /ask` / `POST /goal` for testing.) Watch alerts carry an agent-chosen urgency
 (normal / high / **critical** — critical bypasses Do-Not-Disturb).
 
 ## Patterns, not a fixed list

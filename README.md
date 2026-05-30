@@ -120,21 +120,25 @@ Two cooperating layers, both inside Home Assistant:
    watches (with **vision**) and acts with **judgment**, gated by **guardrails** and a **cost
    guard**, with **SQLite** persistence. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-A lightweight **bridge** links them: the front-end forwards anything agentic (watching, scheduling,
-presence simulation, camera checks) to the Guardian — so the voice assistant becomes a thin mic for
-the Guardian's full toolset. Quick requests come back **spoken inline** (the bridge waits a few
-seconds for the Guardian's reply); longer tasks are acknowledged and the result arrives by push.
+The two are joined by a small **custom integration** (`custom_components/cooper/`) that registers the
+Guardian directly as a Home Assistant **conversation agent**. Set Assist's agent to **Cooper** and
+every utterance goes straight to the Guardian over HTTP — it reasons, acts, and the assistant speaks
+the reply, with conversation **memory** (follow-ups) and **in-chat confirmations** ("unlock the front
+door — yes or no?"). One brain, a direct request/response.
 
 ## Install & setup
 
-Cooper Guardian installs like any Home Assistant add-on — **Settings → Add-ons → Add-on Store → ⋮ →
-Repositories**, add `https://github.com/kunalkhosla/cooper`, then install **Cooper Guardian**. On
-first run it self-provisions the voice bridge (request + response `input_text` helpers + an "Ask
-Cooper" script, exposed to Assist).
+Two parts:
+1. **Add-on** — **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add
+   `https://github.com/kunalkhosla/cooper`, install **Cooper Guardian**, set your Anthropic key, start
+   it. On first run it self-provisions the **kill-switch** helper (`input_boolean.cooper_pause`).
+2. **Integration** — install `custom_components/cooper/` (via HACS as a custom repository, or copy it
+   to `/config/custom_components/`), restart HA, then **Settings → Devices & Services → Add Integration
+   → Cooper** and point it at the add-on (`http://homeassistant.local:8099`). Finally set it as your
+   Assist **conversation agent** (Settings → Voice assistants).
 
-> **Full setup — options, the `/healthz` + `/goal` control surface, and the one manual step (a
-> routing instruction for your conversation agent) — lives in the [add-on setup guide](addon/README.md)**
-> (also shown on the add-on's Documentation tab in HA). That's the single source of truth for setup.
+> **Full setup — options, the `/healthz` + `/ask` + `/goal` control surface — lives in the
+> [add-on setup guide](addon/README.md)** (also shown on the add-on's Documentation tab in HA).
 
 It also runs as a plain Docker container for local development (`HA_URL` + `HA_TOKEN` instead of the
 supervisor token).
