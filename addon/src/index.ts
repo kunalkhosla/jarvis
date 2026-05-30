@@ -94,10 +94,10 @@ createServer(async (req, res) => {
     let raw = ""; for await (const c of req) raw += c;
     let body: any;
     try { body = JSON.parse(raw || "{}"); } catch { return json(400, { error: "invalid JSON" }); }
-    const { text, history } = body;
+    const { text, history, session_id } = body;
     if (!text || typeof text !== "string") return json(400, { error: "text (string) required" });
     try {
-      const reply = await handleUtterance(text.trim(), Array.isArray(history) ? history : undefined);
+      const reply = await handleUtterance(text.trim(), Array.isArray(history) ? history : undefined, typeof session_id === "string" ? session_id : undefined);
       return json(200, { reply });
     } catch (e) { return json(500, { error: String(e) }); }
   }
@@ -260,11 +260,34 @@ ha.onEvent("mobile_app_notification_action", async (d) => {
   pendingConfirm.delete(id);
   if (verb === "NO") { log(`${C.gray}✗ #${id} denied${C.reset}`); notifyAll(`Okay — skipped ${p.domain}.${p.service}.`); return; }
   if (paused) { notifyAll(`Can't run that — Cooper is paused.`); return; }
+  if (cfg.observeMode) { log(`${C.gray}[observe] #${id} approved but not acting: ${p.domain}.${p.service}${C.reset}`); notifyAll(`Observe mode is on — I didn't actually do ${p.domain}.${p.service}.`); return; }
   log(`${C.green}✓ #${id} approved → ${p.domain}.${p.service}${C.reset}`);
   store.logAction(Date.now(), null, "confirm:execute", `${p.domain}.${p.service} ${JSON.stringify(p.data)}`);
   try { await ha.callService(p.domain, p.service, p.data); notifyAll(`Done — ${p.domain}.${p.service}.`); }
   catch (e) { notifyAll(`Couldn't do ${p.domain}.${p.service}: ${e}`); }
 });
+
+// ---- In-chat confirmations (conversation path) ----
+// When a confirm-tier action comes up DURING a conversation turn, we don't push — we ask the user a
+// yes/no in the reply and resolve it on their NEXT turn. Keyed by session (conversation_id). The push
+// path above stays for AUTONOMOUS confirms (a watch acting while no conversation is open).
+const pendingSessionConfirm = new Map<string, { actions: { domain: string; service: string; data: Record<string, unknown> }[]; ts: number }>();
+const SESSION_CONFIRM_TTL = 300_000;
+const AFFIRM = /^\s*(y|ya|yes|yeah|yep|yup|sure|ok|okay|do it|go ahead|confirm|confirmed|please do|affirmative)\b/i;
+const NEGATIVE = /^\s*(n|no|nope|nah|cancel|stop|don'?t|negative|never\s?mind|skip|leave it)\b/i;
+
+/** Session-scoped requestConfirm: queue the action against the session and tell the agent to ASK in
+ *  its reply (instead of pushing). Resolved by the user's next utterance (see handleUtterance). */
+function requestSessionConfirm(session: string, domain: string, service: string, data: Record<string, unknown>, _reason: string): string {
+  const human = `${domain}.${service}${data?.entity_id ? ` on ${[data.entity_id].flat().join(", ")}` : ""}`;
+  const cur = pendingSessionConfirm.get(session) ?? { actions: [], ts: Date.now() };
+  const sig = confirmSig(domain, service, data);
+  if (!cur.actions.some((a) => confirmSig(a.domain, a.service, a.data) === sig)) cur.actions.push({ domain, service, data });
+  cur.ts = Date.now();
+  pendingSessionConfirm.set(session, cur);
+  log(`${C.yellow}⚠ in-chat confirm queued [${session.slice(0, 8)}]: ${human}${C.reset}`);
+  return `Confirmation needed for ${human}. In your reply, ASK the user to confirm with a short yes/no question (e.g. "Unlock the front door — yes or no?"). Do NOT claim it's done; it runs only if they say yes on their next turn.`;
+}
 
 const hooks: Hooks = {
   paused: () => paused,
@@ -286,8 +309,36 @@ const hooks: Hooks = {
 // callers decide how to deliver it (speak inline, push, stream). `history` is recent conversation
 // turns, injected as context so follow-ups resolve ("turn it off" → the thing from the last turn).
 export interface Turn { role: string; text: string }
-async function handleUtterance(text: string, history?: Turn[]): Promise<string> {
+async function handleUtterance(text: string, history?: Turn[], session?: string): Promise<string> {
   const tnow = Date.now();
+  // In-chat confirmation: if this session asked a yes/no last turn, resolve it before anything else.
+  if (session) {
+    const pend = pendingSessionConfirm.get(session);
+    if (pend && tnow - pend.ts < SESSION_CONFIRM_TTL) {
+      if (AFFIRM.test(text)) {
+        pendingSessionConfirm.delete(session);
+        if (paused) return "Can't do that — Cooper is paused (kill-switch on).";
+        if (cfg.observeMode) {
+          const would = pend.actions.map((a) => `${a.domain}.${a.service}${a.data?.entity_id ? ` on ${[a.data.entity_id].flat().join(", ")}` : ""}`).join(", ");
+          log(`${C.gray}[observe] in-chat confirm approved but not acting: ${would}${C.reset}`);
+          return `Observe mode is on, so I didn't actually do it — but I would: ${would}.`;
+        }
+        const done: string[] = []; const failed: string[] = [];
+        for (const a of pend.actions) {
+          try { await ha.callService(a.domain, a.service, a.data); store.logAction(tnow, null, "confirm:execute", `${a.domain}.${a.service} ${JSON.stringify(a.data)}`); done.push(`${a.domain}.${a.service}`); }
+          catch (e) { failed.push(`${a.domain}.${a.service} (${String(e).slice(0, 80)})`); }
+        }
+        log(`${C.green}✓ in-chat confirm executed: ${done.join(", ") || "none"}${failed.length ? ` | failed: ${failed.join(", ")}` : ""}${C.reset}`);
+        return failed.length ? `Done: ${done.join(", ")}. Couldn't: ${failed.join(", ")}.` : `Done — ${done.join(", ")}.`;
+      }
+      if (NEGATIVE.test(text)) { pendingSessionConfirm.delete(session); log(`${C.gray}✗ in-chat confirm declined [${session.slice(0, 8)}]${C.reset}`); return "Okay — skipped it."; }
+      pendingSessionConfirm.delete(session); // neither yes nor no → user moved on; drop the stale confirm and handle the new request
+    } else if (pend) pendingSessionConfirm.delete(session); // expired
+  }
+  // Confirm-tier actions in a conversation ask in-chat (this session); autonomous paths still push.
+  const askHooks: Hooks = session
+    ? { ...hooks, requestConfirm: (d, s, data, reason) => requestSessionConfirm(session, d, s, data, reason) }
+    : hooks;
   const histCtx = history && history.length
     ? `\n\nRecent conversation (for context / pronoun resolution — newest last):\n${history.map((h) => `${h.role}: ${h.text}`).join("\n")}`
     : "";
@@ -306,15 +357,14 @@ async function handleUtterance(text: string, history?: Turn[]): Promise<string> 
     header(`📥 watch: "${text}" (#${g.id})${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.untilPresent ? " [until home]" : ""}${g.whileAway ? " [standing while-away]" : ""}`);
     store.logAction(g.created, g.id, "watch:create", text);
     if (g.whileAway) { checkPresenceStandDown(tnow).catch(() => {}); return `Standing watch set: "${text}". I'll arm whenever everyone's out.`; }
-    try { const r = await runGoal(cfg, ha, text, `(initial check — establish what's normal)${histCtx}`, budget, hooks); log(`   ${C.green}→ ${r}${C.reset}`); return r; }
+    try { return await runGoal(cfg, ha, text, `(initial check — establish what's normal)${histCtx}`, budget, askHooks); }
     catch (e) { log(`   ${C.red}watch intake error: ${e}${C.reset}`); return `Couldn't set that watch up: ${e}`; }
   }
   // Any non-watch request → run it now (control / schedule / answer) and report the result back.
   header(`📥 request: "${text}"`);
   store.logAction(tnow, null, "ask:do", text);
   try {
-    const r = await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${histCtx}`, budget, hooks);
-    log(`   ${C.green}→ ${r}${C.reset}`); return r;
+    return await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${histCtx}`, budget, askHooks);
   } catch (e) { log(`   ${C.red}request error: ${e}${C.reset}`); return `Sorry — I hit an error: ${e}`; }
 }
 

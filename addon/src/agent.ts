@@ -263,8 +263,11 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         else if (tier === "never") out = "REFUSED (forbidden action)";
         else if (hooks?.paused?.()) out = "[paused] Cooper is paused (kill-switch on) — not acting; tell the user it's paused";
         else if (tier === "confirm") {
-          if (cfg.observeMode) out = `[observe] would ask you to confirm ${a.domain}.${a.service}`;
-          else if (hooks?.requestConfirm) out = hooks.requestConfirm(a.domain, a.service, a.data ?? {}, a.reason ?? "");
+          // Ask for confirmation (in-chat for a conversation, push for autonomous). Even in observe
+          // mode we still ASK — the resolver reports "would" instead of acting, so the whole confirm
+          // flow is exercisable without actuation.
+          if (hooks?.requestConfirm) out = hooks.requestConfirm(a.domain, a.service, a.data ?? {}, a.reason ?? "");
+          else if (cfg.observeMode) out = `[observe] would ask you to confirm ${a.domain}.${a.service}`;
           else out = `DEFERRED for user confirmation: ${a.domain}.${a.service} (${a.reason})`;
         }
         else if (cfg.observeMode) out = `[observe] would call ${a.domain}.${a.service} ${JSON.stringify(a.data ?? {})}`;

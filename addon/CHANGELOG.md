@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.0
+- **In-chat confirmations.** A confirm-tier action (lock, alarm, valve, garage close, siren) raised
+  during a conversation now asks a **yes/no right in the reply** and resolves on your next turn —
+  "Lock the front door — yes or no?" → "yes". No more tapping a push notification. The push path is
+  kept for *autonomous* confirmations (a watch acting while no conversation is open). Keyed by
+  `session_id`; affirmative/negative is matched deterministically and the pending ask expires after
+  5 minutes.
+- **Observe mode now rehearses the whole confirm flow** without acting — it still asks, and on "yes"
+  reports what it *would* do. This also fixes a latent leak where a confirmed action (push or in-chat)
+  executed even in observe mode.
+- Removed a duplicate reply log line (`→ …` duplicated the `✔ finish:` line).
+
 ## 0.21.0
 - **New `POST /ask` endpoint — the foundation for Cooper as a native Assist agent.** A request
   (`{text, session_id, history?}`) runs the full eval and returns `{reply}` synchronously — no
