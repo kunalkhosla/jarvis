@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.5.0
+- **A general semantic check replaces per-case prompt rules.** When an authored rule is mechanically
+  valid but doesn't match what you *meant* (a "watch tonight" that stops at 11:59pm), there was no
+  general catch — so fixes kept getting hard-coded into the prompt, drifting back toward the
+  feature-by-feature engine v2 set out to kill. Now, after the deterministic entity/service check, one
+  tight semantic pass asks "does this rule actually fulfill the request?" (scope, lifecycle, every
+  action, does the alert reach you) and makes Cooper fix it before saving. Because that catch is general,
+  the **use-case-specific prompt wording was stripped** — the prompt now states only the bounded HA
+  *mechanisms* (date condition, midnight-crossing window, self-disable, photo format) and lets Cooper
+  reason which fits.
+- **Progress is now Cooper's own words, spoken live.** Instead of fixed status lines, each step streams a
+  short natural sentence from Cooper ("Sure, let me take a look around." / "Checking the front cameras.")
+  — varied, deduped (no more "Checking the home. Checking the home."), and pluralized for multiple
+  cameras.
+
 ## 1.4.2
 - **"Tonight" / overnight watches no longer cut off at midnight.** Authoring conflated "today" with
   "tonight" and used a same-day date condition, so a "watch the front door tonight" rule stopped at
