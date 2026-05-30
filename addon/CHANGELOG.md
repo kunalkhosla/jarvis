@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.4
+- **Reaper safety:** the dead-rule cleanup now requires BOTH Cooper markers (config id `cooper_*` **and**
+  alias `[Cooper] …`) before deleting anything — it can never touch one of your own automations.
+
 ## 1.6.3
 - **Self-disabling rules actually disable now.** HA derives an automation's entity_id from the alias
   slug, not the config id — so a rule's `automation.turn_off` on `automation.<id>` hit a nonexistent

@@ -246,7 +246,9 @@ async function reapDeadAutomations(): Promise<void> {
   lastReap = now;
   try {
     const states = await ha.getStates();
-    const mine = states.filter((s) => s.entity_id.startsWith("automation.") && (String(s.attributes?.id ?? "").startsWith("cooper_") || String(s.attributes?.friendly_name ?? "").startsWith("[Cooper]")));
+    // STRICT: only ever reap genuine Cooper automations — require BOTH markers Cooper always sets
+    // together (config id cooper_* AND alias [Cooper] …). Never touch a user's own automation.
+    const mine = states.filter((s) => s.entity_id.startsWith("automation.") && String(s.attributes?.id ?? "").startsWith("cooper_") && String(s.attributes?.friendly_name ?? "").startsWith("[Cooper]"));
     const today = new Date().toLocaleDateString("en-CA", { timeZone: process.env.TZ || "UTC" }); // YYYY-MM-DD local
     for (const a of mine) {
       const id = String(a.attributes?.id ?? ""); if (!id) continue;
