@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.26.0
+- **Cooper can answer "what happened?" now (#10).** New `get_history` tool queries HA state history
+  over a window, so questions about the **past** ("any motion overnight?", "was the garage opened
+  today?") are answered from real history instead of being silently answered with *current* state
+  (which is what made "any movements from last night?" report a person standing there *right now*).
+  Defaults to motion/person/door/occupancy sensors, digests to when each one activated; the system
+  prompt now routes past-tense questions to it.
+
 ## 0.25.0
 - **Watch intent is agent-classified now (watch-engine v2, part 1 — #9).** Removed the keyword regex
   that decided watch-vs-not — it mis-fired both ways: it *missed* "if you see motion, notify me" (ran

@@ -26,6 +26,17 @@ export class HaClient {
 
   getStates = (): Promise<EntityState[]> => this.rest("/states");
 
+  /** State history for `entityIds` over [startMs, endMs] — HA's period endpoint, one chronological
+   *  array per entity ({state, last_changed}, full attributes on the first point). For "what happened"
+   *  questions (get_live_context is current-state only). significant_changes_only drops attribute noise. */
+  async getHistory(entityIds: string[], startMs: number, endMs: number): Promise<EntityState[][]> {
+    if (!entityIds.length) return [];
+    const start = new Date(startMs).toISOString();
+    const q = `filter_entity_id=${encodeURIComponent(entityIds.join(","))}&end_time=${encodeURIComponent(new Date(endMs).toISOString())}&minimal_response&significant_changes_only`;
+    const d = await this.rest(`/history/period/${start}?${q}`);
+    return (d as EntityState[][]) ?? [];
+  }
+
   /** HA's configured location/timezone (the ground truth for any location-based reasoning).
    *  Cached — it doesn't change at runtime. */
   private _config: Record<string, unknown> | null = null;

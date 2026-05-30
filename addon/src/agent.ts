@@ -8,6 +8,9 @@ import { C, L, header } from "./log.js";
 const SYSTEM = `You are Cooper, a home agent for a Home Assistant smart home.
 You are given a GOAL and live home state. Reason about what (if anything) to do RIGHT NOW.
 - Use get_live_context to read state before acting or answering.
+- PAST vs NOW: get_live_context is the CURRENT moment ONLY. For anything that ALREADY happened
+  ("what happened overnight", "any motion earlier", "was the garage opened today") use get_history —
+  never answer a question about the past from current state.
 - Act via call_service. Reversible actions (lights/fans/media/climate) run automatically; risky
   ones (locks, alarm, valve, garage/awning close, sirens) need confirmation — call_service sends the
   user a Yes/No on their phone and returns "Asked the user to confirm…" (it runs only if they tap
@@ -75,6 +78,8 @@ You are given a GOAL and live home state. Reason about what (if anything) to do 
 const TOOLS: Anthropic.Tool[] = [
   { name: "get_live_context", description: "Read current live entity states. Optional domains filter.",
     input_schema: { type: "object", properties: { domains: { type: "array", items: { type: "string" } } } } },
+  { name: "get_history", description: "Look at PAST events (HA state history) over a recent window — use for ANY question about what already happened ('what happened overnight?', 'any motion at the front door yesterday?', 'was the garage opened today?'). get_live_context is the CURRENT moment only; this is the past. Defaults to motion/person/door/occupancy sensors if you don't pass `entities`. Returns when each sensor activated (turned on).",
+    input_schema: { type: "object", properties: { hours: { type: "number", description: "how many hours back (default 12, max 168)" }, entities: { type: "array", items: { type: "string" }, description: "specific entity_ids to check; omit to scan motion/person/door/occupancy sensors" } } } },
   { name: "call_service", description: "Call an HA service. Reversible runs automatically; risky is deferred for confirmation.",
     input_schema: { type: "object", required: ["domain", "service", "reason"],
       properties: { domain: { type: "string" }, service: { type: "string" }, data: { type: "object" }, reason: { type: "string" } } } },
@@ -215,6 +220,40 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         });
         out = JSON.stringify(compact).slice(0, 30000);
         L(`    ${C.cyan}🔍 get_live_context(${(a.domains ?? ["all"]).join(",")}) -> ${compact.length} entities${C.reset}`);
+      }
+      else if (t.name === "get_history") {
+        const hours = Math.min(Math.max(Number(a.hours) || 12, 1), 168);
+        const end = Date.now(); const start = end - hours * 3600_000;
+        await ensureIds();
+        // Explicit entities, or default to the "what happened" sensors (motion/person/door/occupancy/safety).
+        let ents: string[] = Array.isArray(a.entities) ? (a.entities as string[]).filter((e) => knownIds!.has(e)) : [];
+        if (!ents.length) {
+          const states = await ha.getStates();
+          const CLASSES = new Set(["motion", "occupancy", "door", "window", "presence", "opening", "garage_door", "smoke", "gas", "moisture", "safety"]);
+          ents = states.filter((s) => s.entity_id.startsWith("binary_sensor.") &&
+            (CLASSES.has(String(s.attributes?.device_class)) || /_(person|motion|vehicle|animal|pet|package|face)\b/.test(s.entity_id))).map((s) => s.entity_id);
+        }
+        ents = ents.slice(0, 60);
+        const hist = await ha.getHistory(ents, start, end);
+        // Digest to the meaningful signal: when each sensor turned "on".
+        const events: Array<{ entity: string; name?: string; activations: number; at: string[] }> = [];
+        for (const arr of hist) {
+          if (!arr.length) continue;
+          const id = (arr[0] as { entity_id?: string }).entity_id ?? "";
+          const name = (arr[0].attributes as Record<string, unknown> | undefined)?.friendly_name as string | undefined;
+          const at: string[] = []; let prev = "";
+          for (const p of arr) {
+            const st = (p as { state: string }).state;
+            if (st === "on" && prev !== "on") at.push((p as { last_changed?: string; last_updated?: string }).last_changed ?? (p as any).last_updated ?? "");
+            prev = st;
+          }
+          if (at.length) events.push({ entity: id, name, activations: at.length, at: at.slice(0, 20) });
+        }
+        events.sort((x, y) => y.activations - x.activations);
+        out = events.length
+          ? JSON.stringify({ window_hours: hours, since: new Date(start).toISOString(), detections: events }).slice(0, 16000)
+          : `No activations in the last ${hours}h across ${ents.length} sensor(s) checked. Quiet.`;
+        L(`    ${C.cyan}🕘 get_history(${hours}h, ${ents.length} ents) -> ${events.length} active${C.reset}`); log.push(`history ${hours}h: ${events.length} sensor(s) had activity`);
       }
       else if (t.name === "look_at_camera") {
         const names: string[] = [a.cameras].flat().filter(Boolean);
