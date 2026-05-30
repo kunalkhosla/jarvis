@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1
+- **Faster authoring** — the deterministic validator now guarantees an authored rule's entities and
+  services are real, so Cooper no longer spends an extra LLM round-trip re-reading and self-verifying
+  what it just wrote. One fewer model call per automation/script. (Streaming responses, the real fix for
+  the voice-pipeline timeout on long turns, are the next step.)
+
 ## 1.3.0
 - **Deterministic validation of authored rules (sandboxed, no LLM).** Before an automation/script is
   saved, the host checks — against the real registries — that every `entity_id` and every

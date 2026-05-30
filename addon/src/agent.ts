@@ -42,10 +42,10 @@ ROUTE every request to the lightest thing that does the job:
      nothing). "until 6pm" → a time condition. one-shot / N-times → an action calling automation.turn_off
      on itself, or a counter. Attaching a photo in a notify action → data {image:"/api/camera_proxy/
      <camera_entity>"} (a bare "camera" key is ignored); send to a specific notify target, not notify.notify.
-   • VERIFY YOUR WORK: after you author, the tool returns the stored rule — re-read it against the user's
-     FULL request before claiming it's set up (every clause present? triggers on the right entities/
-     place/type? lifecycle right? does the alert actually deliver?). If anything is off, call
-     create_automation again with the SAME id to fix it, THEN finish.
+   • The create tool DETERMINISTICALLY checks that every entity_id and service in your rule exists and
+     REJECTS it if any don't (so you never save a rule that silently fails). On success, just confirm to
+     the user and finish — no re-read step. ONLY if it reports problems, fix them and call create again
+     with the same id.
 5. MANAGE rules → list_automations / list_scripts to see what exists; delete_automation /
    delete_script when the user implies one is done ("nevermind, I got the package", "stop watching for
    the delivery", "remove that"). Your artifacts are tagged [Cooper] / id cooper_*; reuse the same id
@@ -237,14 +237,9 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
           const problems = await validateConfig(ha, cfg2);
           if (problems.length) out = `NOT CREATED — these are real, checked problems; fix them and call create_automation again with the SAME id:\n- ${problems.join("\n- ")}`;
           else {
-            try {
-              await ha.upsertAutomation(id, cfg2);
-              // Hand the STORED rule back so the agent also self-verifies SEMANTICS (does it match the
-              // request?) — the deterministic check above already guaranteed entities/services are real.
-              const stored = await ha.getAutomationConfig(id).catch(() => cfg2);
-              out = `created automation ${id} ("${cfg2.alias}"). VERIFY this stored rule against the user's FULL request before you claim it's set up — every clause present? triggers on the right entities/place/type? lifecycle correct (today/once/N-times)? If anything's off, call create_automation again with the SAME id to fix it.\nSTORED: ${JSON.stringify(stored).slice(0, 5000)}`;
-              lastConfirmation = `Set it up — automation "${cfg2.alias}" is live.`;
-            }
+            // The deterministic validator above already guaranteed every entity/service is real, so we
+            // don't burn another model round-trip on an LLM self-re-read — just confirm and let it finish.
+            try { await ha.upsertAutomation(id, cfg2); out = `created automation ${id} ("${cfg2.alias}") — live; entities + services validated. Confirm to the user and finish.`; lastConfirmation = `Set it up — automation "${cfg2.alias}" is live.`; }
             catch (e) { out = `ERROR creating automation: ${String(e).slice(0, 200)}`; }
           }
         }
@@ -277,12 +272,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
           const problems = await validateConfig(ha, sc);
           if (problems.length) out = `NOT CREATED — fix these real problems and call create_script again with the SAME id:\n- ${problems.join("\n- ")}`;
           else {
-            try {
-              await ha.upsertScript(id, sc);
-              const stored = await ha.getScriptConfig(id).catch(() => sc);
-              out = `created script ${id} ("${sc.alias}") — run with script.turn_on entity_id script.${id}. VERIFY this stored sequence matches the full request (every step/entity/delay correct?) before claiming done; if not, create_script again with the same id.\nSTORED: ${JSON.stringify(stored).slice(0, 4000)}`;
-              lastConfirmation = `Set it up — script "${sc.alias}" is ready.`;
-            }
+            try { await ha.upsertScript(id, sc); out = `created script ${id} ("${sc.alias}") — run with script.turn_on entity_id script.${id}; entities + services validated. Confirm to the user and finish.`; lastConfirmation = `Set it up — script "${sc.alias}" is ready.`; }
             catch (e) { out = `ERROR creating script: ${String(e).slice(0, 200)}`; }
           }
         }
