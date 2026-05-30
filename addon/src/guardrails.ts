@@ -13,7 +13,28 @@ const CONFIRM = new Set([
 
 const AUTO_DOMAINS = new Set([
   "light", "fan", "media_player", "humidifier", "scene", "switch", "climate", "notify", "tts",
+  // Running a script/automation is as safe as the actions inside it. Cooper's OWN authored scripts are
+  // already vetted all-auto at create time (vetConfig), so requiring a second confirm just to RUN one
+  // is pointless friction — and a user's pre-existing script/automation is their own intent.
+  "script", "automation",
 ]);
+
+/** The state a target entity should reach after a given service, so a caller can read the entity back
+ *  and confirm the action actually took effect instead of trusting a 200 (e.g. a lock that won't lock).
+ *  Keyed by the bare service name (no domain). Null/absent = nothing deterministic to verify. */
+export const EXPECTED_STATE: Record<string, string> = {
+  turn_on: "on", turn_off: "off",
+  lock: "locked", unlock: "unlocked",
+  open_cover: "open", close_cover: "closed",
+  open_valve: "open", close_valve: "closed",
+  alarm_arm_away: "armed_away", alarm_arm_home: "armed_home",
+  alarm_arm_night: "armed_night", alarm_disarm: "disarmed",
+};
+
+/** Resulting state to verify for a `domain.service` (or bare service), or null if not verifiable. */
+export function expectedStateFor(service: string): string | null {
+  return EXPECTED_STATE[service.includes(".") ? service.split(".").pop()! : service] ?? null;
+}
 
 export function tierFor(domain: string, service: string): Tier {
   const key = `${domain}.${service}`;

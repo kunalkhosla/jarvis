@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.1.0
+- **Area-awareness — Cooper now knows the home's layout.** It reads HA's area registry, tags every
+  entity in `get_live_context` with its area, and has a new `get_home_map` tool (areas → their
+  entities). So a spatial request — "watch the backyard", "all the upstairs lights", "outside" — targets
+  *every* entity in that area instead of guessing by name and missing some. Entities with no area fall
+  back to name matching. (Assigning your outdoor cameras/sensors to their areas, or labeling them, makes
+  this even sharper.)
+- **Cooper verifies actions actually took effect before claiming success (#2).** A `200` from a service
+  call only means HA accepted it, not that the device obeyed — so Cooper now reads the entity back and
+  only says "done" if it reached the target state (lock→locked, cover→open, etc.). If it didn't take
+  (e.g. a lock that won't lock), it says so instead of falsely claiming success. Applies to direct
+  actions and both confirmation paths.
+- **Authored rules cover the WHOLE request, with the judgment step wired as a callback (#1).** Fixes
+  rules that dropped the "tell me / send a photo" part or just played a TTS "let me check the camera"
+  and then didn't. The smart step (look at a camera, decide who/what) must now call `conversation.process`
+  back to `conversation.cooper` so Cooper actually looks and notifies with the photo on each trigger —
+  never a blind TTS stand-in.
+- **Running a script no longer needs a needless confirm (#3).** `script`/`automation` are auto-tier, so
+  Cooper can run its own just-authored (and already-vetted) script immediately instead of asking
+  permission to press go.
+- **Spoken replies sound like speech (#4).** `finish` summaries are now natural second-person sentences
+  ("Turned on the gym lights.") instead of third-person log lines ("User is heading to the gym…").
+
 ## 1.0.0
 - **Cooper is now a routing agent over Home Assistant — the bespoke watch/automation engine is gone.**
   Instead of reimplementing an automation engine feature-by-feature (watch/do/task/sequence goal types,

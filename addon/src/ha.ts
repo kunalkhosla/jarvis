@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import type { Config } from "./config.js";
+import { expectedStateFor } from "./guardrails.js";
 
 export interface EntityState {
   entity_id: string;
@@ -67,6 +68,65 @@ export class HaClient {
 
   callService = (domain: string, service: string, data: Record<string, unknown> = {}) =>
     this.rest(`/services/${domain}/${service}`, { method: "POST", body: JSON.stringify(data) });
+
+  /** Render an HA Jinja template (e.g. for area/registry data not exposed over plain REST). */
+  async template(t: string): Promise<string> {
+    const r = await fetch(`${this.cfg.haBaseUrl}/template`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.cfg.haToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ template: t }),
+    });
+    if (!r.ok) throw new Error(`HA /template -> ${r.status} ${await r.text()}`);
+    return r.text();
+  }
+
+  /** entity_id → area NAME for every entity that has one (resolved through its device too). Cached for
+   *  the process: areas change rarely and this backs the home-map context on every eval. The template
+   *  walks all entities and emits [id, area] pairs for those with an area. */
+  private _areaMap: Map<string, string> | null = null;
+  async areaMap(): Promise<Map<string, string>> {
+    if (this._areaMap) return this._areaMap;
+    const m = new Map<string, string>();
+    try {
+      const raw = await this.template(
+        "{% set ns = namespace(o=[]) %}" +
+        "{% for e in states | map(attribute='entity_id') %}" +
+        "{% set a = area_name(e) %}{% if a %}{% set ns.o = ns.o + [[e, a]] %}{% endif %}" +
+        "{% endfor %}{{ ns.o | tojson }}",
+      );
+      for (const [id, area] of JSON.parse(raw) as [string, string][]) m.set(id, area);
+    } catch { /* areas optional — fall back to no area annotation */ }
+    this._areaMap = m;
+    return m;
+  }
+
+  /** After a state-changing call, confirm the target entities actually reached the expected state, so
+   *  we never claim success on a 200 that didn't take effect (e.g. a lock that won't lock). Returns
+   *  ok=true when there's nothing deterministic to verify. Polls briefly to allow for actuation lag. */
+  async verifyServiceEffect(service: string, data: Record<string, unknown> = {}): Promise<{ ok: boolean; detail: string }> {
+    const expected = expectedStateFor(service);
+    const ids = [(data as { entity_id?: unknown })?.entity_id].flat().filter((x): x is string => typeof x === "string");
+    if (!expected || !ids.length) return { ok: true, detail: "" };
+    const bad: string[] = [];
+    for (const id of ids) {
+      const final = await this.awaitState(id, expected);
+      if (final !== expected) bad.push(`${id} reads "${final}" (wanted "${expected}")`);
+    }
+    return bad.length ? { ok: false, detail: bad.join("; ") } : { ok: true, detail: `confirmed ${expected}` };
+  }
+
+  /** Poll an entity until it reaches `expected` (allowing for device actuation lag), else return its
+   *  final observed state. */
+  async awaitState(entityId: string, expected: string, tries = 4, gapMs = 1200): Promise<string> {
+    let last = "unknown";
+    for (let i = 0; i < tries; i++) {
+      const st = await this.getState(entityId);
+      last = st?.state ?? "unknown";
+      if (last === expected) return expected;
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, gapMs));
+    }
+    return last;
+  }
 
   /** POST to an HA config endpoint (e.g. /config/script/config/<id>) — used for self-provisioning. */
   postConfig = (path: string, body: unknown) => this.rest(path, { method: "POST", body: JSON.stringify(body) });

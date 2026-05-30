@@ -30,14 +30,24 @@ ROUTE every request to the lightest thing that does the job:
    • create_script for an on-demand SEQUENCE with delays/steps ("run the pump 10 min" = on, delay,
      off; presence sim = a paced, uneven light sequence). Run it now via call_service script.turn_on
      if the user wants it immediately.
-   • For the SMART step inside a rule (judge a camera: "is this actually a delivery / a person?"), add
-     an action calling service conversation.process with {agent_id:"conversation.cooper", text:"<tell
-     yourself to look at the right camera, decide, and notify if it matches>"} — the rule calls YOU
-     back to judge on each real trigger, so you never poll.
-   • To alert from a rule, prefer routing through conversation.process (uses the right notify targets +
-     can attach the camera photo), or notify a real target (see NOTIFY TARGETS below).
-   Resolve real entity_ids with get_live_context BEFORE authoring; if the user names something with no
-   exact entity ("front door"), pick the closest match or ask.
+   • COVER THE WHOLE REQUEST — every part of it becomes an action. If the user said "tell me" / "let
+     me know" / "send a photo" / "see who it is", the rule MUST actually alert them — NEVER drop that
+     part, and NEVER author a rule that only plays a tts message SAYING it will check something it then
+     doesn't check.
+   • THE SMART STEP IS A CALLBACK, NOT A GUESS. Whenever a rule needs judgment — "is this actually a
+     delivery / a person / someone I know?", look at a camera, decide who/what — its action MUST call
+     service conversation.process with {agent_id:"conversation.cooper", text:"<instruct yourself:
+     look at <the specific camera nearest the trigger>, decide if it's <what they care about>, and if
+     so notify me with the photo>"}. That makes the rule wake YOU on each real trigger to look and
+     judge. Do NOT substitute a blind tts/notify for the look-and-decide step. (A blunt deterrent like
+     lights/sprinklers may fire immediately, but the "see who it is / tell me" part still goes through
+     the conversation.process callback so a human actually gets the photo.)
+   • To alert from a rule, route through conversation.process (it looks + attaches the camera photo +
+     uses the right targets), or notify a real target directly (see NOTIFY TARGETS below).
+   Resolve real entity_ids BEFORE authoring (get_live_context; for SPATIAL requests — "the backyard",
+   "outside", "upstairs" — use get_home_map so you target EVERY entity in that area, not a name guess
+   that misses some). If the user names something with no exact entity ("front door"), pick the closest
+   match or ask.
 5. MANAGE rules → list_automations / list_scripts to see what exists; delete_automation /
    delete_script when the user implies one is done ("nevermind, I got the package", "stop watching for
    the delivery", "remove that"). Your artifacts are tagged [Cooper] / id cooper_*; reuse the same id
@@ -61,7 +71,9 @@ you *would*, never claim you did. "[paused]" = kill-switch on — say so. Report
 Always end with a short spoken reply (call finish, or just reply) — never end a turn silently.`;
 
 const TOOLS: Anthropic.Tool[] = [
-  { name: "get_live_context", description: "Read current live entity states. Optional domains filter.",
+  { name: "get_live_context", description: "Read current live entity states (each tagged with its HA AREA when assigned). Optional domains filter.",
+    input_schema: { type: "object", properties: { domains: { type: "array", items: { type: "string" } } } } },
+  { name: "get_home_map", description: "The home's AREAS mapped to the entities in each (Backyard, Side Yard, Driveway, Kitchen, …). Use this when a request is SPATIAL — 'watch the backyard', 'all the upstairs lights', 'outside' — so you target EVERY entity in that area instead of guessing by name and missing some. Optional `domains` filters (e.g. ['light'] or ['binary_sensor','camera']). Note: an entity with no area won't appear here — fall back to get_live_context + name matching for those.",
     input_schema: { type: "object", properties: { domains: { type: "array", items: { type: "string" } } } } },
   { name: "get_history", description: "Look at PAST events (HA state history) over a recent window — use for ANY question about what already happened ('what happened overnight?', 'any motion at the front door yesterday?', 'was the garage opened today?'). get_live_context is the CURRENT moment only; this is the past. Defaults to motion/person/door/occupancy sensors if you don't pass `entities`. Returns when each sensor activated (turned on).",
     input_schema: { type: "object", properties: { hours: { type: "number", description: "how many hours back (default 12, max 168)" }, entities: { type: "array", items: { type: "string" }, description: "specific entity_ids to check; omit to scan motion/person/door/occupancy sensors" } } } },
@@ -74,7 +86,7 @@ const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: { type: { type: "string", enum: ["daily", "hourly"] } } } },
   { name: "notify", description: "Send a push notification. 'camera' (entity_id/name) attaches a live photo. 'priority' sets urgency by YOUR judgment of severity: normal=routine FYI, high=wants attention now (visitor/package), critical=genuine safety only (intruder/smoke/flood) — critical bypasses silent & Do-Not-Disturb and sounds the alarm channel.",
     input_schema: { type: "object", required: ["message"], properties: { message: { type: "string" }, camera: { type: "string" }, priority: { type: "string", enum: ["normal", "high", "critical"] } } } },
-  { name: "create_automation", description: "Author a NATIVE Home Assistant automation for anything ongoing, conditional, scheduled, or recurring ('alert me when…', 'every evening…', 'if X then Y', 'watch for… 3 times then stop'). HA runs it natively (cheap triggers, survives restarts, visible/editable in the user's Automations UI) — far better than you polling. `id` is a stable slug (prefix 'cooper_'); `config` is the automation body: {alias, trigger:[...], condition?:[...], action:[...], mode?}. Lifecycle is native: time conditions/triggers for 'today'/'until', a counter or `automation.turn_off` (self-disable) for one-shot / N-times. For the SMART step (e.g. 'is this actually a delivery?', looking at a camera), make an action call service `conversation.process` with data {agent_id:'conversation.cooper', text:'<instruction telling Cooper to look and decide and notify>'} — the automation thus calls you back to judge on each real trigger. Resolve real entity_ids first with get_live_context.",
+  { name: "create_automation", description: "Author a NATIVE Home Assistant automation for anything ongoing, conditional, scheduled, or recurring ('alert me when…', 'every evening…', 'if X then Y', 'watch for… 3 times then stop'). HA runs it natively (cheap triggers, survives restarts, visible/editable in the user's Automations UI) — far better than you polling. `id` is a stable slug (prefix 'cooper_'); `config` is the automation body: {alias, trigger:[...], condition?:[...], action:[...], mode?}. Lifecycle is native: time conditions/triggers for 'today'/'until', a counter or `automation.turn_off` (self-disable) for one-shot / N-times. For the SMART step (e.g. 'is this actually a delivery?', 'who is it?', looking at a camera), the action MUST call service `conversation.process` with data {agent_id:'conversation.cooper', text:'<instruction telling Cooper to look at the specific camera, decide, and notify with the photo>'} — the automation thus calls you back to judge on each real trigger. NEVER substitute a blind tts/notify for the look-and-decide step, and COVER THE WHOLE REQUEST: if the user wants to be told / sent a photo, include that callback (or a notify action) — don't drop it. Resolve real entity_ids first with get_live_context (or get_home_map for whole-area requests).",
     input_schema: { type: "object", required: ["id", "config"], properties: { id: { type: "string" }, config: { type: "object" } } } },
   { name: "list_automations", description: "List existing automations (entity_id, config id, alias, on/off) — use before editing/deleting, or to answer 'what are you watching for / what automations do I have'.",
     input_schema: { type: "object", properties: {} } },
@@ -86,7 +98,7 @@ const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: {} } },
   { name: "delete_script", description: "Delete a script by its config `id`/object_id (from list_scripts). Use when a sequence is no longer needed.",
     input_schema: { type: "object", required: ["id"], properties: { id: { type: "string" } } } },
-  { name: "finish", description: "End: summarize what you did / decided.",
+  { name: "finish", description: "End the turn. `summary` is spoken ALOUD to the user, so write it as a short, natural sentence addressed to THEM (second person) — e.g. 'Turned on the gym lights.' / 'Have a good workout!' / 'I set up the backyard watch.' NOT a third-person log line like 'User is heading to the gym; acknowledged their departure.'",
     input_schema: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } } },
 ];
 
@@ -254,16 +266,34 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         L(`    ${C.cyan}🎬 delete_script(${id}) -> ${out}${C.reset}`); log.push(out);
       }
       else if (t.name === "get_live_context") {
-        const ents = await ha.liveContext(a.domains);
+        const [ents, areas] = await Promise.all([ha.liveContext(a.domains), ha.areaMap()]);
         const compact = ents.map((e) => {
           const at = e.attributes as Record<string, unknown>;
           const o: Record<string, unknown> = { id: e.entity_id, name: at.friendly_name, state: e.state };
+          const area = areas.get(e.entity_id);
+          if (area) o.area = area; // so "the backyard" can resolve to every entity in that area
           for (const k of ["current_temperature", "temperature", "humidity", "device_class"])
             if (at[k] !== undefined) o[k] = at[k];
           return o;
         });
         out = JSON.stringify(compact).slice(0, 30000);
         L(`    ${C.cyan}🔍 get_live_context(${(a.domains ?? ["all"]).join(",")}) -> ${compact.length} entities${C.reset}`);
+      }
+      else if (t.name === "get_home_map") {
+        // Areas → their entities (optionally filtered by domain), so authoring something spatial ("the
+        // backyard", "all the upstairs lights") can target a whole area instead of guessing by name.
+        const [states, areas] = await Promise.all([ha.getStates(), ha.areaMap()]);
+        const want: string[] | undefined = Array.isArray(a.domains) && a.domains.length ? a.domains : undefined;
+        const byArea: Record<string, string[]> = {};
+        for (const s of states) {
+          const area = areas.get(s.entity_id);
+          if (!area) continue;
+          if (want && !want.includes(s.entity_id.split(".")[0])) continue;
+          (byArea[area] ??= []).push(s.entity_id);
+        }
+        out = JSON.stringify(byArea).slice(0, 30000);
+        const unassigned = states.filter((s) => !areas.get(s.entity_id)).length;
+        L(`    ${C.cyan}🗺 get_home_map(${want?.join(",") ?? "all"}) -> ${Object.keys(byArea).length} areas, ${unassigned} unassigned${C.reset}`);
       }
       else if (t.name === "get_history") {
         const hours = Math.min(Math.max(Number(a.hours) || 12, 1), 168);
@@ -356,11 +386,19 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         else if (cfg.observeMode) out = `[observe] would call ${a.domain}.${a.service} ${JSON.stringify(a.data ?? {})}`;
         else {
           // A single failing service call must NOT abort the whole eval — feed the error back as a
-          // tool result so the agent can adjust (wrong service/params/entity) and keep going.
-          try { await ha.callService(a.domain, a.service, a.data ?? {}); out = "done"; }
+          // tool result so the agent can adjust (wrong service/params/entity) and keep going. After a
+          // successful call, READ THE ENTITY BACK and only report success if it actually reached the
+          // target state — a 200 just means HA accepted the call, not that the device obeyed (e.g. a
+          // lock with no subscription stays unlocked). Never claim "done" on an effect that didn't land.
+          try {
+            await ha.callService(a.domain, a.service, a.data ?? {});
+            const v = await ha.verifyServiceEffect(a.service, a.data ?? {});
+            out = v.ok ? (v.detail ? `done (${v.detail})` : "done")
+              : `SENT but NOT confirmed — ${v.detail}. The action did not take effect; tell the user it didn't work / may need attention and do NOT claim you did it.`;
+          }
           catch (e) { out = `ERROR: ${a.domain}.${a.service} failed (${String(e).slice(0, 200)}) — NOT done. Fix the service/params/entity and retry, or skip it; keep handling the other actions.`; }
         }
-        const oc = out === "done" ? C.green : out.startsWith("ERROR") || out.startsWith("REFUSED") ? C.red : C.yellow;
+        const oc = out.startsWith("done") ? C.green : out.startsWith("ERROR") || out.startsWith("REFUSED") ? C.red : C.yellow;
         L(`    ${oc}⚙ call_service ${a.domain}.${a.service} [${tier}] -> ${out}${C.reset}`); log.push(`${a.domain}.${a.service} [${tier}] -> ${out}`);
       }
       results.push({ type: "tool_result", tool_use_id: t.id, content: out });

@@ -89,7 +89,11 @@ ha.onEvent("mobile_app_notification_action", async (d) => {
   if (cfg.observeMode) { log(`${C.gray}[observe] #${id} approved but not acting: ${p.domain}.${p.service}${C.reset}`); notifyAll(`Observe mode is on — I didn't actually do ${p.domain}.${p.service}.`); return; }
   log(`${C.green}✓ #${id} approved → ${p.domain}.${p.service}${C.reset}`);
   store.logAction(Date.now(), null, "confirm:execute", `${p.domain}.${p.service} ${JSON.stringify(p.data)}`);
-  try { await ha.callService(p.domain, p.service, p.data); notifyAll(`Done — ${p.domain}.${p.service}.`); }
+  try {
+    await ha.callService(p.domain, p.service, p.data);
+    const v = await ha.verifyServiceEffect(p.service, p.data); // confirm it actually took effect
+    notifyAll(v.ok ? `Done — ${p.domain}.${p.service}.` : `Tried ${p.domain}.${p.service} but it didn't take — ${v.detail}.`);
+  }
   catch (e) { notifyAll(`Couldn't do ${p.domain}.${p.service}: ${e}`); }
 });
 
@@ -135,7 +139,14 @@ async function handleUtterance(text: string, history?: Turn[], session?: string)
         }
         const done: string[] = []; const failed: string[] = [];
         for (const a of pend.actions) {
-          try { await ha.callService(a.domain, a.service, a.data); store.logAction(tnow, null, "confirm:execute", `${a.domain}.${a.service} ${JSON.stringify(a.data)}`); done.push(`${a.domain}.${a.service}`); }
+          try {
+            await ha.callService(a.domain, a.service, a.data);
+            store.logAction(tnow, null, "confirm:execute", `${a.domain}.${a.service} ${JSON.stringify(a.data)}`);
+            // Read the entity back — a 200 doesn't mean the device obeyed. Only report success if it did.
+            const v = await ha.verifyServiceEffect(a.service, a.data);
+            if (v.ok) done.push(`${a.domain}.${a.service}`);
+            else failed.push(`${a.domain}.${a.service} — didn't take (${v.detail})`);
+          }
           catch (e) { failed.push(`${a.domain}.${a.service} (${String(e).slice(0, 80)})`); }
         }
         log(`${C.green}✓ in-chat confirm executed: ${done.join(", ") || "none"}${failed.length ? ` | failed: ${failed.join(", ")}` : ""}${C.reset}`);
