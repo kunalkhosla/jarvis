@@ -128,17 +128,18 @@ door — yes or no?"). One brain, a direct request/response.
 
 ## Install & setup
 
-Two parts:
+Two parts — the **add-on** (the brain) and the **integration** (the voice):
+
 1. **Add-on** — **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add
    `https://github.com/kunalkhosla/cooper`, install **Cooper Guardian**, set your Anthropic key, start
    it. On first run it self-provisions the **kill-switch** helper (`input_boolean.cooper_pause`).
 2. **Integration** — install `custom_components/cooper/` (via HACS as a custom repository, or copy it
-   to `/config/custom_components/`), restart HA, then **Settings → Devices & Services → Add Integration
-   → Cooper** and point it at the add-on (`http://homeassistant.local:8099`). Finally set it as your
-   Assist **conversation agent** (Settings → Voice assistants).
+   to `/config/custom_components/`), **restart HA**, then **Settings → Devices & Services → Add
+   Integration → Cooper** and point it at the add-on (`http://homeassistant.local:8099`). Finally set it
+   as your Assist **conversation agent** (Settings → Voice assistants).
 
-> **Full setup — options, the `/healthz` + `/ask` + `/goal` control surface — lives in the
-> [add-on setup guide](addon/README.md)** (also shown on the add-on's Documentation tab in HA).
+> **👉 Full step-by-step instructions — prerequisites, configuration, first use, troubleshooting — are in
+> [docs/SETUP.md](docs/SETUP.md).** Start there.
 
 It also runs as a plain Docker container for local development (`HA_URL` + `HA_TOKEN` instead of the
 supervisor token).
