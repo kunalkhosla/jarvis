@@ -138,6 +138,8 @@ export class HaClient {
     await this.rest(`/config/automation/config/${id}`, { method: "POST", body: JSON.stringify(config) });
     await this.callService("automation", "reload");
   }
+  /** Read back an automation's stored config (HA's canonical/normalized form) for self-verification. */
+  getAutomationConfig = (id: string): Promise<Record<string, unknown>> => this.rest(`/config/automation/config/${id}`);
   /** Delete an automation's config by id, then reload. */
   async deleteAutomation(id: string): Promise<void> {
     await this.rest(`/config/automation/config/${id}`, { method: "DELETE" });
@@ -157,6 +159,8 @@ export class HaClient {
     await this.rest(`/config/script/config/${id}`, { method: "POST", body: JSON.stringify(config) });
     await this.callService("script", "reload");
   }
+  /** Read back a script's stored config for self-verification. */
+  getScriptConfig = (id: string): Promise<Record<string, unknown>> => this.rest(`/config/script/config/${id}`);
   /** Delete a script's config by id, then reload. */
   async deleteScript(id: string): Promise<void> {
     await this.rest(`/config/script/config/${id}`, { method: "DELETE" });

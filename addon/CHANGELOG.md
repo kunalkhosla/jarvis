@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.0
+- **Stop encoding per-use-case rules; reason from grounded context + self-verify.** The prompt was
+  drifting back toward `O(use-cases)` special cases ("deliveries go to the front door", "AI sensors beat
+  motion") — the exact thing v2 set out to kill, just moved from code into prose. Replaced that with two
+  general mechanisms:
+  - **Grounding:** Cooper picks entities from the real home, not name guesses — `get_live_context` tags
+    each entity with its **area** and **device_class**, and `get_home_map` gives areas → entities. It's
+    told to choose the entities that fit and the *most specific* sensor for the subject (a person sensor
+    for a person, not a broad motion one), and that classifying *what/who* (a delivery, a stranger) is
+    its own vision job via the `conversation.process` callback — not a hardcoded rule.
+  - **Self-verification:** after authoring, `create_automation`/`create_script` hand the **stored rule
+    back** to Cooper, which re-reads it against the full request (every clause present? right triggers?
+    correct lifecycle? does the alert deliver?) and fixes it (same id) before claiming it's set up. One
+    general check that catches wrong entities, no-op "today" windows, and missing alerts at once —
+    instead of a new prompt rule per mistake.
+- Kept only bounded HA-schema facts (the "today" date condition, the notify `image:` format, self-disable
+  for one-shot) — those are finite facts about HA, not per-use-case branches.
+
 ## 1.1.1
 - **Log timestamps are now in your local timezone** (adopted from HA's configured timezone at boot)
   instead of UTC.

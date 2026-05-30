@@ -24,43 +24,28 @@ ROUTE every request to the lightest thing that does the job:
 4. ONGOING / CONDITIONAL / SCHEDULED / RECURRING / TIMED — "alert me when…", "every evening…", "if X
    then Y", "watch for a delivery 3 times then stop", presence simulation, "in 10 min turn off…" —
    do NOT poll or do it live. AUTHOR a native HA artifact and let HA run it:
-   • create_automation for event/time/state-triggered rules. Lifecycle is NATIVE and YOU compose it:
-     – "today / tonight only": a 00:00–23:59 time window is WRONG — it is true EVERY day, forever, and
-       scopes nothing. Limit to one day with a DATE condition using the ACTUAL date from CURRENT TIME
-       above, e.g. condition template {{ now().strftime('%Y-%m-%d') == 'YYYY-MM-DD' }} (fill in today)
-       so it goes dormant after today. "until 6pm" → a time condition before "18:00:00".
-     – one-shot / "3 times then stop": an action that calls automation.turn_off on itself (self-disable)
-       after firing, or a counter helper. while-away → presence triggers.
-   • create_script for an on-demand SEQUENCE with delays/steps ("run the pump 10 min" = on, delay,
-     off; presence sim = a paced, uneven light sequence). Run it now via call_service script.turn_on
-     if the user wants it immediately.
-   • COVER THE WHOLE REQUEST — every part of it becomes an action. If the user said "tell me" / "let
-     me know" / "send a photo" / "see who it is", the rule MUST actually alert them — NEVER drop that
-     part, and NEVER author a rule that only plays a tts message SAYING it will check something it then
-     doesn't check.
-   • THE SMART STEP IS A CALLBACK, NOT A GUESS. Whenever a rule needs judgment — "is this actually a
-     delivery / a person / someone I know?", look at a camera, decide who/what — its action MUST call
-     service conversation.process with {agent_id:"conversation.cooper", text:"<instruct yourself:
-     look at <the specific camera nearest the trigger>, decide if it's <what they care about>, and if
-     so notify me with the photo>"}. That makes the rule wake YOU on each real trigger to look and
-     judge. Do NOT substitute a blind tts/notify for the look-and-decide step. (A blunt deterrent like
-     lights/sprinklers may fire immediately, but the "see who it is / tell me" part still goes through
-     the conversation.process callback so a human actually gets the photo.)
-   • To alert from a rule, route through conversation.process (it looks + attaches the camera photo +
-     uses the right targets), or notify a real target directly (see NOTIFY TARGETS below). To attach a
-     photo in an authored notify action, the data MUST be {image: "/api/camera_proxy/<camera_entity>"}
-     — a "camera" key does NOT work in a raw notify (that shortcut only exists in your own notify tool).
-   Resolve real entity_ids BEFORE authoring (get_live_context; for SPATIAL requests — "the backyard",
-   "outside", "upstairs" — use get_home_map so you target EVERY entity in that area, not a name guess
-   that misses some). PICK SENSORS AT THE LOCATION THE EVENT ACTUALLY HAPPENS: a package/delivery/
-   visitor arrives at the FRONT DOOR / DRIVEWAY / FRONT YARD — trigger on those, never side-yard or
-   interior/garage sensors. PREFER AI-DETECTION sensors (the *_person / *_vehicle / *_animal
-   binary_sensors the cameras expose) over plain *_motion / *_occupancy, which fire on anything (wind,
-   cars passing, pets). There is NO "package/delivery" sensor — so for a DELIVERY, trigger on the
-   driveway/front *_vehicle and *_person AI sensors, then the action calls conversation.process so YOU
-   look at the camera and CONFIRM it's actually a delivery (truck/uniform/package) before alerting —
-   the AI sensor narrows it, your vision makes the call. If the user names something with no exact
-   entity ("front door"), pick the closest match or ask.
+   • create_automation for event/time/state-triggered rules; create_script for an on-demand SEQUENCE of
+     steps with delays (run it now via call_service script.turn_on if they want it immediately).
+   • GROUND every entity choice in the REAL home — never guess from names. get_live_context (each entity
+     carries its AREA and device_class) and get_home_map (areas → their entities) tell you WHAT each
+     entity is and WHERE it is. Pick the entities that genuinely fit what the user means, and the MOST
+     SPECIFIC sensor for the subject (a person-detection sensor for a person — not a broad motion/
+     occupancy one that trips on anything). A detection sensor only says SOMETHING is there; when the
+     user cares WHAT/WHO it is (a delivery, a stranger, which person), the classification is YOURS, not
+     the sensor's — so the rule's action calls conversation.process {agent_id:"conversation.cooper",
+     text:"<look at <the right camera>, decide if it's <what they care about>, and alert with the photo
+     if so>"} to wake you to look and judge on each trigger. Never replace that with a blind tts/notify.
+   • COVER THE WHOLE REQUEST: every clause becomes part of the rule. If they want to be told / sent a
+     photo, the rule must actually do it — never author one that only announces it will.
+   • HA COMPOSITION FACTS (use exactly): "today/tonight" → a DATE condition from the current date,
+     {{ now().strftime('%Y-%m-%d') == 'YYYY-MM-DD' }} (a 00:00–23:59 window is true EVERY day and scopes
+     nothing). "until 6pm" → a time condition. one-shot / N-times → an action calling automation.turn_off
+     on itself, or a counter. Attaching a photo in a notify action → data {image:"/api/camera_proxy/
+     <camera_entity>"} (a bare "camera" key is ignored); send to a specific notify target, not notify.notify.
+   • VERIFY YOUR WORK: after you author, the tool returns the stored rule — re-read it against the user's
+     FULL request before claiming it's set up (every clause present? triggers on the right entities/
+     place/type? lifecycle right? does the alert actually deliver?). If anything is off, call
+     create_automation again with the SAME id to fix it, THEN finish.
 5. MANAGE rules → list_automations / list_scripts to see what exists; delete_automation /
    delete_script when the user implies one is done ("nevermind, I got the package", "stop watching for
    the delivery", "remove that"). Your artifacts are tagged [Cooper] / id cooper_*; reuse the same id
@@ -232,7 +217,14 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         if (vet.never.length) out = `REFUSED: this automation would perform forbidden action(s): ${vet.never.join(", ")}. Not creating it.`;
         else if (vet.confirm.length) out = `REFUSED: this automation would AUTONOMOUSLY do risky action(s) (${vet.confirm.join(", ")}) with no human in the loop — that bypasses the confirm safeguard. Re-author it so the rule NOTIFIES the user (or calls conversation.process to alert with camera context) and a person decides; keep only reversible actions automatic.`;
         else {
-          try { await ha.upsertAutomation(id, cfg2); out = `created automation ${id} ("${cfg2.alias}")`; lastConfirmation = `Set it up — automation "${cfg2.alias}" is live.`; }
+          try {
+            await ha.upsertAutomation(id, cfg2);
+            // Hand the STORED rule back so the agent self-verifies it against the full request before
+            // claiming done (general check — catches wrong entities, no-op lifecycle, missing alert).
+            const stored = await ha.getAutomationConfig(id).catch(() => cfg2);
+            out = `created automation ${id} ("${cfg2.alias}"). VERIFY this stored rule against the user's FULL request before you claim it's set up — every clause present? triggers on the right entities/place/type? lifecycle correct (today/once/N-times)? does the alert actually deliver? If anything's off, call create_automation again with the SAME id to fix it.\nSTORED: ${JSON.stringify(stored).slice(0, 5000)}`;
+            lastConfirmation = `Set it up — automation "${cfg2.alias}" is live.`;
+          }
           catch (e) { out = `ERROR creating automation: ${String(e).slice(0, 200)}`; }
         }
         L(`    ${C.cyan}🤖 create_automation(${id}) -> ${out}${C.reset}`); log.push(out);
@@ -261,7 +253,12 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         if (vet.never.length) out = `REFUSED: this script would perform forbidden action(s): ${vet.never.join(", ")}. Not creating it.`;
         else if (vet.confirm.length) out = `REFUSED: this script would perform risky action(s) (${vet.confirm.join(", ")}) unattended. Scripts are for reversible timed sequences (lights/switches/media/pump/watering) — for a risky action, ask the user to confirm it directly instead of scripting it.`;
         else {
-          try { await ha.upsertScript(id, sc); out = `created script ${id} ("${sc.alias}") — run with script.turn_on entity_id script.${id}`; lastConfirmation = `Set it up — script "${sc.alias}" is ready.`; }
+          try {
+            await ha.upsertScript(id, sc);
+            const stored = await ha.getScriptConfig(id).catch(() => sc);
+            out = `created script ${id} ("${sc.alias}") — run with script.turn_on entity_id script.${id}. VERIFY this stored sequence matches the full request (every step/entity/delay correct?) before claiming done; if not, create_script again with the same id.\nSTORED: ${JSON.stringify(stored).slice(0, 4000)}`;
+            lastConfirmation = `Set it up — script "${sc.alias}" is ready.`;
+          }
           catch (e) { out = `ERROR creating script: ${String(e).slice(0, 200)}`; }
         }
         L(`    ${C.cyan}🎬 create_script(${id}) -> ${out}${C.reset}`); log.push(out);
