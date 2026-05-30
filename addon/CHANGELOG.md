@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0
+- **Streaming responses — running feedback instead of dead air.** A long agentic turn (authoring,
+  camera checks) used to sit silent for 30-50s, long enough that the Assist **voice pipeline timed out
+  and only text came back, no speech**. Now the add-on streams a short, speakable status for each step
+  ("Checking the home…", "Looking at the camera…", "Setting up the automation…") and then the final
+  reply, and the conversation integration feeds those into HA's chat-log stream — so you hear/see
+  progress within a second or two and the voice pipeline gets a response in time to speak it.
+- Requires the **Cooper integration via HACS at 0.3.0** alongside this add-on. The streaming path
+  degrades safely: if a Home Assistant version doesn't support the chat-log streaming API, the
+  integration automatically falls back to the previous single-reply behavior (no breakage).
+
 ## 1.3.1
 - **Faster authoring** — the deterministic validator now guarantees an authored rule's entities and
   services are real, so Cooper no longer spends an extra LLM round-trip re-reading and self-verifying

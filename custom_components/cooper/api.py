@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import AsyncIterator
 
 import aiohttp
 from homeassistant.core import HomeAssistant
@@ -63,5 +65,44 @@ class CooperApi:
                     raise CooperApiError(f"/ask -> {resp.status} {body[:200]}")
                 data = await resp.json()
                 return data.get("reply", "")
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise CooperApiError(str(err)) from err
+
+    async def ask_stream(
+        self,
+        text: str,
+        session_id: str,
+        history: list[dict[str, str]] | None = None,
+        device_id: str | None = None,
+        user_id: str | None = None,
+    ) -> AsyncIterator[dict]:
+        """Stream the add-on's NDJSON progress for one utterance.
+
+        Yields dicts like {"type": "step", "text": ...} as the agent works and a final
+        {"type": "final", "reply": ...}. Lets the caller feed running feedback to HA's voice pipeline.
+        """
+        payload: dict = {"text": text, "session_id": session_id, "history": history or [], "stream": True}
+        if device_id:
+            payload["device_id"] = device_id
+        if user_id:
+            payload["user_id"] = user_id
+        try:
+            async with self._session.post(
+                f"{self._url}/ask",
+                json=payload,
+                headers=self._headers,
+                timeout=aiohttp.ClientTimeout(total=120, sock_read=120),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise CooperApiError(f"/ask(stream) -> {resp.status} {body[:200]}")
+                async for raw in resp.content:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        yield json.loads(line)
+                    except ValueError:
+                        continue
         except (aiohttp.ClientError, TimeoutError) as err:
             raise CooperApiError(str(err)) from err

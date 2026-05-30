@@ -30,11 +30,26 @@ createServer(async (req, res) => {
       let raw = ""; for await (const c of req) raw += c;
       let body: any;
       try { body = JSON.parse(raw || "{}"); } catch { return json(400, { error: "invalid JSON" }); }
-      const { text, history, session_id, device_id, user_id } = body;
+      const { text, history, session_id, device_id, user_id, stream } = body;
       if (!text || typeof text !== "string") return json(400, { error: "text (string) required" });
+      const hist = Array.isArray(history) ? history : undefined;
+      const sid = typeof session_id === "string" ? session_id : undefined;
+      const did = typeof device_id === "string" ? device_id : undefined;
+      const uid = typeof user_id === "string" ? user_id : undefined;
+      // Streaming mode (NDJSON): emit a {type:"step"} line per agent step as it runs, then a final
+      // {type:"final"} with the reply — so the integration can feed running feedback to HA's voice
+      // pipeline instead of one slow blob. Non-stream callers get the plain {reply} JSON as before.
+      if (stream === true) {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache", "Connection": "keep-alive" });
+        const send = (obj: unknown) => { try { res.write(JSON.stringify(obj) + "\n"); } catch { /* client gone */ } };
+        try {
+          const reply = await handleUtterance(text.trim(), hist, sid, did, uid, (t) => send({ type: "step", text: t }));
+          send({ type: "final", reply });
+        } catch (e) { send({ type: "final", reply: `Sorry — I hit an error: ${String(e).slice(0, 200)}` }); }
+        return res.end();
+      }
       try {
-        const reply = await handleUtterance(text.trim(), Array.isArray(history) ? history : undefined, typeof session_id === "string" ? session_id : undefined,
-          typeof device_id === "string" ? device_id : undefined, typeof user_id === "string" ? user_id : undefined);
+        const reply = await handleUtterance(text.trim(), hist, sid, did, uid);
         return json(200, { reply });
       } catch (e) { return json(500, { error: String(e) }); }
     }
@@ -148,7 +163,7 @@ async function callerContext(deviceId?: string, userId?: string): Promise<string
 }
 
 export interface Turn { role: string; text: string }
-async function handleUtterance(text: string, history?: Turn[], session?: string, deviceId?: string, userId?: string): Promise<string> {
+async function handleUtterance(text: string, history?: Turn[], session?: string, deviceId?: string, userId?: string, onProgress?: (text: string) => void): Promise<string> {
   const tnow = Date.now();
   await refreshPaused(); // keep the kill-switch fresh per turn (v2 has no state_changed subscription)
 
@@ -212,7 +227,7 @@ async function handleUtterance(text: string, history?: Turn[], session?: string,
   header(`📥 request: "${text}"`);
   store.logAction(tnow, null, "ask:do", text);
   try {
-    return await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${callerCtx}${mgmtCtx}${histCtx}`, budget, askHooks);
+    return await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${callerCtx}${mgmtCtx}${histCtx}`, budget, askHooks, onProgress);
   } catch (e) { log(`   ${C.red}request error: ${e}${C.reset}`); return `Sorry — I hit an error: ${e}`; }
 }
 

@@ -140,7 +140,25 @@ export interface Hooks {
   requestConfirm?: (domain: string, service: string, data: Record<string, unknown>, reason: string) => string;
 }
 
-export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget, hooks?: Hooks): Promise<string> {
+// Short, speakable status for the tools used in a step — streamed to the user as the turn runs so a
+// long agentic turn gives running feedback (and the voice pipeline gets a response before it times out)
+// instead of 40s of silence. Returns null for a step worth no narration.
+function stepNarration(toolNames: string[]): string | null {
+  const has = (n: string) => toolNames.includes(n);
+  if (has("create_automation")) return "Setting up the automation…";
+  if (has("create_script")) return "Setting up the sequence…";
+  if (has("delete_automation") || has("delete_script")) return "Removing that…";
+  if (has("look_at_camera")) return "Looking at the camera…";
+  if (has("call_service")) return "On it…";
+  if (has("get_history")) return "Looking back over what happened…";
+  if (has("get_forecast")) return "Checking the forecast…";
+  if (has("web_search")) return "Searching…";
+  if (has("list_automations") || has("list_scripts")) return "Checking what's set up…";
+  if (has("get_home_map") || has("get_live_context")) return "Checking the home…";
+  return null;
+}
+
+export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget, hooks?: Hooks, onProgress?: (text: string) => void): Promise<string> {
   const anthropic = new Anthropic({ apiKey: cfg.anthropicKey });
   const log: string[] = [];
   let lastConfirmation = ""; // most recent user-facing action result, used as a fallback reply if the agent ends with no text
@@ -207,6 +225,9 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     const toolUses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === "tool_use");
     const u = res.usage as Anthropic.Usage & { cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
     L(`  ${C.gray}step ${step}: ${toolUses.length} tool call(s) [stop_reason=${res.stop_reason}] tok in=${u.input_tokens} out=${u.output_tokens} cache(w=${u.cache_creation_input_tokens ?? 0} r=${u.cache_read_input_tokens ?? 0})${C.reset}`);
+    // Stream a short, speakable status for this step so the user gets running feedback during a long
+    // turn (and the voice pipeline gets something to say before it times out), not 40s of silence.
+    if (onProgress && !finishing) { const n = stepNarration(toolUses.map((t) => t.name)); if (n) onProgress(n); }
     // No client tool calls → Claude has answered directly (text). Return that.
     if (toolUses.length === 0) return textOf(res.content) || lastConfirmation || "Okay — done.";
 
