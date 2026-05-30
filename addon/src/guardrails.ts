@@ -28,3 +28,33 @@ export function tierFor(domain: string, service: string): Tier {
   // Unknown → be conservative.
   return "confirm";
 }
+
+/** Recursively collect every HA service call ("domain.service") referenced anywhere in an automation
+ *  or script config — under either the legacy `service:` key or the newer `action:` key (HA ≥2024.10).
+ *  Only string values shaped like domain.service count, so the top-level `action:` array (a list of
+ *  steps) is walked through, not mistaken for a service string. */
+export function collectServices(node: unknown, out: string[] = []): string[] {
+  if (Array.isArray(node)) { for (const v of node) collectServices(v, out); return out; }
+  if (node && typeof node === "object") {
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if ((k === "service" || k === "action") && typeof v === "string" && /^[a-z_]+\.[a-z0-9_]+$/.test(v)) out.push(v);
+      else collectServices(v, out);
+    }
+  }
+  return out;
+}
+
+/** Vet the actions INSIDE an authored automation/script before it's written. An authored rule runs
+ *  natively in HA with no human in the loop, so a risky action it performs would bypass the per-call
+ *  confirm flow entirely — hence we tier every service it references and let the caller refuse to
+ *  author anything that isn't fully auto-tier. Returns the worst tier plus the offending services. */
+export function vetConfig(config: unknown): { worst: Tier; never: string[]; confirm: string[] } {
+  const never: string[] = [], confirm: string[] = [];
+  for (const s of [...new Set(collectServices(config))]) {
+    const [domain, ...rest] = s.split(".");
+    const t = tierFor(domain, rest.join("."));
+    if (t === "never") never.push(s);
+    else if (t === "confirm") confirm.push(s);
+  }
+  return { worst: never.length ? "never" : confirm.length ? "confirm" : "auto", never, confirm };
+}

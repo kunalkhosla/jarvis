@@ -1,84 +1,64 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Config } from "./config.js";
 import type { HaClient } from "./ha.js";
-import { tierFor } from "./guardrails.js";
+import { tierFor, vetConfig } from "./guardrails.js";
 import type { Budget } from "./budget.js";
 import { C, L, header } from "./log.js";
 
-const SYSTEM = `You are Cooper, a home agent for a Home Assistant smart home.
-You are given a GOAL and live home state. Reason about what (if anything) to do RIGHT NOW.
-- Use get_live_context to read state before acting or answering.
-- PAST vs NOW: get_live_context is the CURRENT moment ONLY. For anything that ALREADY happened
-  ("what happened overnight", "any motion earlier", "was the garage opened today") use get_history —
-  never answer a question about the past from current state.
-- FUTURE vs PAST — don't confuse setting up a watch with looking one up. "if/when you see X, notify
-  me" / "watch for X (today)" / "let me know if X happens" = FORWARD-looking → call start_watch, even
-  if X hasn't occurred yet and even if there's no exact sensor named X (watch the closest cameras, or
-  ask which). NEVER answer a forward "if you see…" request by checking get_history and replying
-  "nothing yet / no alerts needed". "did you see X?" / "any X earlier?" = BACKWARD → get_history.
-- Act via call_service. Reversible actions (lights/fans/media/climate) run automatically; risky
-  ones (locks, alarm, valve, garage/awning close, sirens) need confirmation — call_service sends the
-  user a Yes/No on their phone and returns "Asked the user to confirm…" (it runs only if they tap
-  Yes; don't claim it's done). If it returns "[paused]", Cooper's kill-switch is on — tell the user
-  it's paused and you didn't act. Never invent entities.
-- RUN-FOR-A-DURATION: plain turn_on (switch/light/fan) takes NO duration param (passing one fails) —
-  to run such a device for N minutes, turn it ON and schedule_actions the turn_off after N×60 seconds.
-  IRRIGATION/SPRINKLERS differ: a zone's switch.turn_on runs the zone's app-configured DEFAULT time and
-  ignores the minutes you asked for — to honor a requested duration use the irrigation integration's
-  start service that takes a "duration" in SECONDS (e.g. a *_watering service targeting the zone). For
-  several zones with their own run times, schedule each zone's timed start at the cumulative offset with
-  schedule_actions (controllers run one zone at a time). Watering services are reversible/auto — no
-  confirmations.
-- ONE CONFIRMATION PER DECISION: if a risky (confirm-tier) action applies to several entities, make a
-  SINGLE call_service with entity_id as a LIST — that's one Yes/No for the whole set, not one prompt
-  per entity. Never fire a separate confirmation for each entity.
-- Only act when the goal warrants it; for watch-goals, often the right answer is "nothing to do".
-- ONGOING MONITORING: a single reply does NOT keep watching. If the user wants continuous monitoring
-  or conditional alerting — "keep an eye on…", "if/when you see/detect X, notify me", "let me know
-  if…", "while I'm asleep/away/out, watch…" — you MUST call start_watch with a self-contained goal
-  (what to watch + when to alert). Pick mode: 'event' for a specific trigger (alert WHEN X happens —
-  reacts to events, no idle polling) or 'periodic' for open-ended oversight ("keep an eye on the
-  house" — re-checks on a timer too); ASK if it's genuinely unclear. NEVER say you're "watching",
-  "monitoring", or "will alert you" unless you actually called start_watch this turn. A QUESTION about
-  the past or current state ("did anything happen last night?", "is the door open?") is NOT a watch —
-  just answer it; do not call start_watch.
-- STOP / STAND DOWN: to stop watching, cancel a watch, OR stop a running scheduled sequence (e.g. a
-  multi-zone sprinkler run still in progress with more zones queued), you MUST call cancel_watch (omit
-  "match" for everything, or pass a phrase to target some). Saying you stopped is NOT enough — watches
-  keep re-checking and scheduled steps keep firing until cancel_watch actually cancels them. To also
-  turn off things already running right now, call the matching off/stop service too (e.g. stop_watering
-  / switch.turn_off).
-- CAMERAS: the detection sensors (binary_sensor *_person / *_motion / *_occupancy) only tell you
-  SOMETHING happened. To know WHAT, use look_at_camera to actually see the scene, then describe
-  who/what is there before deciding or alerting. Prefer the camera nearest the triggered sensor.
-  For a person at an entrance, CLASSIFY: delivery / known visitor / unknown — and say which.
-  For a whole-home check ("is everything okay", "check on the house"), look at the OUTDOOR cameras
-  (driveway, yards, entries — infer from names) and check doors/locks/garage, then summarize.
-  PRIVACY: only look at indoor cameras when the goal explicitly calls for it; default to outdoor.
-- When you ALERT about something you saw on a camera, pass that camera as notify's "camera" arg so
-  the user gets the PHOTO alongside your message.
-- Choose notify "priority" by your own judgment of severity: normal for routine FYIs; high for
-  things that want attention soon (a visitor, a package, garage left open); critical ONLY for
-  genuine safety (an unrecognized person while away, someone at night, smoke/fire/flood/leak) —
-  critical bypasses silent & Do-Not-Disturb, so do not overuse it.
-- PRESENCE SIMULATION ("make it look like someone's home", away/vacation watch): make the home look
-  lived-in, never robotic. PLAN the whole sequence yourself with schedule_actions — pick believable,
-  UNEVEN timings (not a fixed metronome), follow dusk/bedtime, nudge one or two rooms at a time, wind
-  down to a single light then off. Schedule it in one shot; the steps then fire on their own. Avoid
-  outdoor/security lights blazing all night. Needs observe_mode off to actually act.
-- ARRIVAL PREP ("prepare the home for my arrival"): make it welcoming for right now — comfortable
-  climate, entry/main lights on if it's dark (check the sun), maybe gentle media; don't touch
-  bedrooms or anything disruptive. Reversible only; confirm anything risky. Needs observe_mode off
-  to actually act.
-- You have built-in web search for live external facts. Use notify to alert the user. Call finish when done.
-- WEATHER: always use get_forecast (HA's forecast for your exact coordinates). NEVER web-search
-  weather — web results reverse-geocode to a nearby town and are often wrong.
-- LOCATION: a "Home location" line is provided below — use ONLY that for anything geographic
-  (weather, sunrise, traffic, local search). NEVER infer location from device/network/entity/SSID
-  names (e.g. a street or Wi-Fi name like "...Dakota..." is NOT a place); they are not geography.
-- REPORT FAITHFULLY from tool results: if call_service returns "[observe]" the action was NOT
-  performed (observe mode) — say you *would* do it, never claim you did. If it returns "DEFERRED",
-  it needs the user's confirmation — say so, don't claim success.`;
+const SYSTEM = `You are Cooper, an intelligent agent for a Home Assistant smart home. The user talks to
+you through Assist; HA automations you create can also call you back to judge a live situation. Decide
+what each request needs and ROUTE it — you are not a fixed script. CURRENT TIME, HOME LOCATION, and your
+NOTIFY TARGETS are given below; use them. Never infer location from device/entity/Wi-Fi names.
+
+READ FIRST: get_live_context for the CURRENT state; get_history for anything that ALREADY happened
+("what happened overnight", "was the garage opened today") — never answer a past question from current
+state. Never invent entities — resolve real entity_ids before acting or authoring.
+
+ROUTE every request to the lightest thing that does the job:
+1. ANSWER a question → read tools (get_live_context / get_history / look_at_camera / get_forecast /
+   web_search) then reply. Weather → get_forecast, NEVER web-search weather.
+2. ACT NOW, reversible (lights, fans, media, climate, switches, scenes) → call_service, confirm done.
+3. ACT NOW, risky (locks, alarm arm/disarm, valve, garage/awning close, sirens) → still call_service;
+   it asks the user Yes/No and runs ONLY on yes — don't claim success before that. One confirmation
+   per decision: for several entities pass entity_id as a LIST (one Yes/No), never one prompt each.
+4. ONGOING / CONDITIONAL / SCHEDULED / RECURRING / TIMED — "alert me when…", "every evening…", "if X
+   then Y", "watch for a delivery 3 times then stop", presence simulation, "in 10 min turn off…" —
+   do NOT poll or do it live. AUTHOR a native HA artifact and let HA run it:
+   • create_automation for event/time/state-triggered rules. Lifecycle is NATIVE — a time
+     condition/trigger for "today / until 6pm", a counter or an action that calls automation.turn_off
+     (self-disable) for one-shot / N-times, presence triggers for while-away.
+   • create_script for an on-demand SEQUENCE with delays/steps ("run the pump 10 min" = on, delay,
+     off; presence sim = a paced, uneven light sequence). Run it now via call_service script.turn_on
+     if the user wants it immediately.
+   • For the SMART step inside a rule (judge a camera: "is this actually a delivery / a person?"), add
+     an action calling service conversation.process with {agent_id:"conversation.cooper", text:"<tell
+     yourself to look at the right camera, decide, and notify if it matches>"} — the rule calls YOU
+     back to judge on each real trigger, so you never poll.
+   • To alert from a rule, prefer routing through conversation.process (uses the right notify targets +
+     can attach the camera photo), or notify a real target (see NOTIFY TARGETS below).
+   Resolve real entity_ids with get_live_context BEFORE authoring; if the user names something with no
+   exact entity ("front door"), pick the closest match or ask.
+5. MANAGE rules → list_automations / list_scripts to see what exists; delete_automation /
+   delete_script when the user implies one is done ("nevermind, I got the package", "stop watching for
+   the delivery", "remove that"). Your artifacts are tagged [Cooper] / id cooper_*; reuse the same id
+   to edit (overwrite) one. The active [Cooper] automations are listed for you below as context.
+
+DURATIONS/SPRINKLERS: plain turn_on takes no duration — for "N minutes" use a script (on, delay, off).
+Irrigation differs: a zone's switch.turn_on runs its app-default time; to honor a requested duration use
+the integration's *_watering start service with a "duration" in SECONDS; sequence multiple zones in a
+script (one zone at a time). Watering services are reversible/auto.
+
+CAMERAS: detection sensors only say SOMETHING happened — use look_at_camera to SEE the scene, describe
+who/what, and CLASSIFY (delivery / known visitor / unknown). Prefer the camera nearest the trigger.
+Whole-home check → outdoor cameras + doors/locks/garage. PRIVACY: indoor cameras only when explicitly
+asked; default outdoor. When you alert about something seen on a camera, attach it via notify's "camera".
+NOTIFY priority by severity: normal=routine FYI; high=wants attention soon (visitor/package/garage open);
+critical=genuine safety only (intruder while away, night person, smoke/flood) — critical bypasses
+silent/DND, don't overuse.
+GUARDRAILS & HONESTY: call_service auto-runs reversible, asks for risky, refuses forbidden; authored
+rules whose actions are risky are vetted the same way. "[observe]" = NOT performed (observe mode) — say
+you *would*, never claim you did. "[paused]" = kill-switch on — say so. Report tool results faithfully.
+Always end with a short spoken reply (call finish, or just reply) — never end a turn silently.`;
 
 const TOOLS: Anthropic.Tool[] = [
   { name: "get_live_context", description: "Read current live entity states. Optional domains filter.",
@@ -92,21 +72,19 @@ const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", required: ["cameras"], properties: { cameras: { type: "array", items: { type: "string" } } } } },
   { name: "get_forecast", description: "HA's local weather forecast for the home's exact location. Use this for ANY weather question — never web-search weather. Optional type: daily (default) or hourly.",
     input_schema: { type: "object", properties: { type: { type: "string", enum: ["daily", "hourly"] } } } },
-  { name: "schedule_actions", description: "Schedule a SEQUENCE of reversible actions to run over time — YOU plan the believable timing. Use for presence simulation ('make it look like someone's home') or anything spread across minutes/hours. Each step fires after 'after_seconds' from now. Reversible actions only (lights/fans/media/climate); risky ones are rejected.",
-    input_schema: { type: "object", required: ["steps"], properties: { steps: { type: "array", items: {
-      type: "object", required: ["after_seconds", "domain", "service"],
-      properties: { after_seconds: { type: "number" }, domain: { type: "string" }, service: { type: "string" }, data: { type: "object" }, note: { type: "string" } } } } } } },
   { name: "notify", description: "Send a push notification. 'camera' (entity_id/name) attaches a live photo. 'priority' sets urgency by YOUR judgment of severity: normal=routine FYI, high=wants attention now (visitor/package), critical=genuine safety only (intruder/smoke/flood) — critical bypasses silent & Do-Not-Disturb and sounds the alarm channel.",
     input_schema: { type: "object", required: ["message"], properties: { message: { type: "string" }, camera: { type: "string" }, priority: { type: "string", enum: ["normal", "high", "critical"] } } } },
-  { name: "cancel_watch", description: "Stand down active watch-goals AND stop pending scheduled/timed sequences (e.g. a multi-zone sprinkler run still mid-sequence) so they stop running, re-checking, and firing future steps. Omit 'match' to cancel EVERYTHING; pass a phrase to target a subset. Call this whenever the user asks to stop watching, stop/cancel a running sequence, remove a watch, or stand down.",
-    input_schema: { type: "object", properties: { match: { type: "string" } } } },
-  { name: "start_watch", description: "Set up a PERSISTENT background watch so the guardian keeps checking the home and ALERTS the user until cancelled. Use whenever the user wants ongoing monitoring or conditional alerting: 'keep an eye on…', 'if/when you see/detect X, notify me', 'let me know if…', 'while I'm asleep/away, watch…'. Pass a self-contained `goal` (WHAT to watch + WHEN/how to alert). Choose `mode`: 'event' for a specific trigger (alert WHEN X happens — reacts to events, no idle polling, cheaper) or 'periodic' for open-ended oversight ('keep an eye on the house' — also re-checks on a timer). If you genuinely can't tell which the user wants, ASK before calling. A QUESTION about the past/current state is NOT a watch — just answer it.",
-    input_schema: { type: "object", required: ["goal", "mode"], properties: { goal: { type: "string" }, mode: { type: "string", enum: ["event", "periodic"] } } } },
   { name: "create_automation", description: "Author a NATIVE Home Assistant automation for anything ongoing, conditional, scheduled, or recurring ('alert me when…', 'every evening…', 'if X then Y', 'watch for… 3 times then stop'). HA runs it natively (cheap triggers, survives restarts, visible/editable in the user's Automations UI) — far better than you polling. `id` is a stable slug (prefix 'cooper_'); `config` is the automation body: {alias, trigger:[...], condition?:[...], action:[...], mode?}. Lifecycle is native: time conditions/triggers for 'today'/'until', a counter or `automation.turn_off` (self-disable) for one-shot / N-times. For the SMART step (e.g. 'is this actually a delivery?', looking at a camera), make an action call service `conversation.process` with data {agent_id:'conversation.cooper', text:'<instruction telling Cooper to look and decide and notify>'} — the automation thus calls you back to judge on each real trigger. Resolve real entity_ids first with get_live_context.",
     input_schema: { type: "object", required: ["id", "config"], properties: { id: { type: "string" }, config: { type: "object" } } } },
   { name: "list_automations", description: "List existing automations (entity_id, config id, alias, on/off) — use before editing/deleting, or to answer 'what are you watching for / what automations do I have'.",
     input_schema: { type: "object", properties: {} } },
   { name: "delete_automation", description: "Delete an automation by its config `id` (from list_automations). Use when the user says a rule is no longer needed ('stop watching for the delivery', 'nevermind', 'remove that').",
+    input_schema: { type: "object", required: ["id"], properties: { id: { type: "string" } } } },
+  { name: "create_script", description: "Author a NATIVE Home Assistant script for an on-demand TIMED SEQUENCE — steps with delays ('run the pump 10 minutes' = turn on, delay 10m, turn off; presence simulation = a paced, uneven light/media sequence; multi-zone sprinkler run = one zone at a time). HA stores and runs it (visible/editable in Scripts, survives restarts). `id` is a stable slug (prefix 'cooper_'); `config` is the script body: {alias, sequence:[ {service,target/data,...}, {delay:{minutes:10}}, ... ], mode?}. Use `delay` for waits — never rely on yourself to come back. To run it immediately after creating, also call_service script.turn_on with entity_id script.<id> (or service script.<id>). Resolve real entity_ids first with get_live_context. Only reversible actions — risky services are refused.",
+    input_schema: { type: "object", required: ["id", "config"], properties: { id: { type: "string" }, config: { type: "object" } } } },
+  { name: "list_scripts", description: "List existing scripts (entity_id, id, alias, state) — use before editing/deleting a script.",
+    input_schema: { type: "object", properties: {} } },
+  { name: "delete_script", description: "Delete a script by its config `id`/object_id (from list_scripts). Use when a sequence is no longer needed.",
     input_schema: { type: "object", required: ["id"], properties: { id: { type: "string" } } } },
   { name: "finish", description: "End: summarize what you did / decided.",
     input_schema: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } } },
@@ -129,19 +107,12 @@ function resolveCameras(raw: string, known: Set<string>, bad: Set<string> = new 
   return [...new Set(matches.sort((a, b) => rank(a) - rank(b)).map(swap))];
 }
 
-/** Runtime hooks the guardian provides: a kill-switch check and an interactive-confirmation sender. */
+/** Runtime hooks the guardian provides: a kill-switch check and an interactive-confirmation sender.
+ *  v2 has no watch/sequence engine — durable behavior is authored as native HA automations/scripts —
+ *  so the only hooks are the kill-switch and the confirm sender. */
 export interface Hooks {
   paused?: () => boolean;
   requestConfirm?: (domain: string, service: string, data: Record<string, unknown>, reason: string) => string;
-  /** Stand down watch-goals AND stop pending scheduled sequences. Omit match for all; pass a phrase to target a subset. */
-  cancelWatches?: (match?: string) => string;
-  /** Register a PERSISTENT watch-goal (ongoing monitoring / conditional alerting). `mode`: 'event'
-   *  (react to triggers, no heartbeat) or 'periodic' (also re-check on a timer). Returns confirmation.
-   *  Only present on the conversation path — autonomous evals can't spawn watches. */
-  startWatch?: (goal: string, mode?: "event" | "periodic") => string;
-  /** Persist + schedule a timed action sequence (validated, auto-tier steps). The host fires due steps
-   *  on a tick — survives restarts, shows in /healthz, and is cancelable as a unit. Returns a summary. */
-  scheduleSequence?: (label: string, steps: Array<{ afterSeconds: number; domain: string; service: string; data?: Record<string, unknown>; note?: string }>) => string;
 }
 
 export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget, hooks?: Hooks): Promise<string> {
@@ -157,13 +128,21 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
   let knownIds: Set<string> | null = null;
   const ensureIds = async () => (knownIds ??= new Set((await ha.getStates()).map((s) => s.entity_id)));
 
-  // Ground every eval in HA's REAL location so geographic reasoning never guesses from entity names.
-  let locationLine = "";
+  // Ground every eval in HA's REAL location + the CURRENT datetime (so authored time-based automations
+  // use the right "now": "at 11:45pm", "today", "every evening") and the REAL notify targets it can put
+  // in a rule's notify action. Never let it guess location from entity names.
+  let locationLine = "", dateLine = "";
   try {
     const hc = await ha.config();
-    locationLine = `\n\nHome location: ${hc.location_name ?? "home"} — latitude ${hc.latitude}, longitude ${hc.longitude}, timezone ${hc.time_zone}. Use this for all geographic reasoning.`;
+    const tz = (hc.time_zone as string) || "UTC";
+    locationLine = `\n\nHome location: ${hc.location_name ?? "home"} — latitude ${hc.latitude}, longitude ${hc.longitude}, timezone ${tz}. Use this for all geographic reasoning.`;
+    const nowStr = new Date().toLocaleString("en-US", { timeZone: tz, weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
+    dateLine = `\n\nCurrent date & time: ${nowStr} (${tz}). Use THIS as "now" when authoring time-based automations/scripts — compute trigger times, "today"/"tonight"/"until", and recurrence from it.`;
   } catch { /* location optional */ }
-  const systemPrompt = SYSTEM + locationLine;
+  const notifyLine = cfg.notifyTargets.length
+    ? `\n\nNOTIFY TARGETS — to alert the user from an authored automation, call one of these notify services in its action: ${cfg.notifyTargets.map((t) => `notify.${t.replace(/^notify\./, "")}`).join(", ")} (or route the alert through conversation.process to conversation.cooper so a photo can be attached).`
+    : `\n\nNOTIFY TARGETS: none configured — alert the user by routing through conversation.process to conversation.cooper.`;
+  const systemPrompt = SYSTEM + locationLine + dateLine + notifyLine;
   // PROMPT CACHING (2 breakpoints). Render order is tools → system → messages, so a single
   // cache_control on the (only) system block caches the whole STATIC prefix — TOOLS + WEB_SEARCH +
   // system — which is byte-identical across every eval for the life of the process. Back-to-back
@@ -211,11 +190,6 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
       const a = t.input as any;
       let out = "";
       if (t.name === "finish") { L(`${C.green}${C.bold}✔ finish:${C.reset}${C.green} ${a.summary}${C.reset}`); return a.summary; }
-      else if (t.name === "cancel_watch") {
-        if (hooks?.cancelWatches) { out = hooks.cancelWatches(typeof a.match === "string" ? a.match : undefined); lastConfirmation = out; }
-        else out = "cannot cancel watches in this context";
-        L(`    ${C.yellow}🛑 cancel_watch(${a.match ?? "all"}) -> ${out}${C.reset}`); log.push(out);
-      }
       else if (t.name === "create_automation") {
         // Enforce a clear Cooper convention regardless of what the model passed: id prefix `cooper_`,
         // alias prefix `[Cooper] `, and a description recording the request — so it's unmistakable in
@@ -227,8 +201,15 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         cfg2.alias = `[Cooper] ${rawAlias}`;
         cfg2.id = id;
         cfg2.description = `Created by Cooper. Request: ${goal}`.slice(0, 255);
-        try { await ha.upsertAutomation(id, cfg2); out = `created automation ${id} ("${cfg2.alias}")`; lastConfirmation = `Set it up — automation "${cfg2.alias}" is live.`; }
-        catch (e) { out = `ERROR creating automation: ${String(e).slice(0, 200)}`; }
+        // Vet the rule's OWN actions: it runs natively with no human in the loop, so a risky action it
+        // performs would bypass the per-call confirm flow. Refuse to author anything not fully auto-tier.
+        const vet = vetConfig(cfg2);
+        if (vet.never.length) out = `REFUSED: this automation would perform forbidden action(s): ${vet.never.join(", ")}. Not creating it.`;
+        else if (vet.confirm.length) out = `REFUSED: this automation would AUTONOMOUSLY do risky action(s) (${vet.confirm.join(", ")}) with no human in the loop — that bypasses the confirm safeguard. Re-author it so the rule NOTIFIES the user (or calls conversation.process to alert with camera context) and a person decides; keep only reversible actions automatic.`;
+        else {
+          try { await ha.upsertAutomation(id, cfg2); out = `created automation ${id} ("${cfg2.alias}")`; lastConfirmation = `Set it up — automation "${cfg2.alias}" is live.`; }
+          catch (e) { out = `ERROR creating automation: ${String(e).slice(0, 200)}`; }
+        }
         L(`    ${C.cyan}🤖 create_automation(${id}) -> ${out}${C.reset}`); log.push(out);
       }
       else if (t.name === "list_automations") {
@@ -243,12 +224,34 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         else { try { await ha.deleteAutomation(id); out = `deleted automation ${id}`; lastConfirmation = "Removed that automation."; } catch (e) { out = `ERROR deleting: ${String(e).slice(0, 200)}`; } }
         L(`    ${C.cyan}🤖 delete_automation(${id}) -> ${out}${C.reset}`); log.push(out);
       }
-      else if (t.name === "start_watch") {
-        const wg = String(a.goal ?? "").trim() || goal;
-        const mode = a.mode === "event" || a.mode === "periodic" ? a.mode : undefined;
-        if (hooks?.startWatch) { out = hooks.startWatch(wg, mode); lastConfirmation = out; }
-        else out = "cannot create a persistent watch in this context";
-        L(`    ${C.cyan}👁 start_watch(${mode ?? "?"}) -> ${out}${C.reset}`); log.push(out);
+      else if (t.name === "create_script") {
+        // Same [Cooper] convention as automations: id prefix cooper_, alias prefix [Cooper].
+        let id = String(a.id ?? "").trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "") || `seq_${Date.now()}`;
+        if (!id.startsWith("cooper_")) id = `cooper_${id}`;
+        const sc = { ...(a.config && typeof a.config === "object" ? a.config : {}) } as Record<string, unknown>;
+        const rawAlias = String(sc.alias ?? id).replace(/^\[Cooper\]\s*/i, "").trim();
+        sc.alias = `[Cooper] ${rawAlias}`;
+        sc.description = `Created by Cooper. Request: ${goal}`.slice(0, 255);
+        const vet = vetConfig(sc);
+        if (vet.never.length) out = `REFUSED: this script would perform forbidden action(s): ${vet.never.join(", ")}. Not creating it.`;
+        else if (vet.confirm.length) out = `REFUSED: this script would perform risky action(s) (${vet.confirm.join(", ")}) unattended. Scripts are for reversible timed sequences (lights/switches/media/pump/watering) — for a risky action, ask the user to confirm it directly instead of scripting it.`;
+        else {
+          try { await ha.upsertScript(id, sc); out = `created script ${id} ("${sc.alias}") — run with script.turn_on entity_id script.${id}`; lastConfirmation = `Set it up — script "${sc.alias}" is ready.`; }
+          catch (e) { out = `ERROR creating script: ${String(e).slice(0, 200)}`; }
+        }
+        L(`    ${C.cyan}🎬 create_script(${id}) -> ${out}${C.reset}`); log.push(out);
+      }
+      else if (t.name === "list_scripts") {
+        const all = await ha.scripts();
+        const mine = all.filter((x) => x.id.startsWith("cooper_") || x.alias.startsWith("[Cooper]"));
+        out = JSON.stringify((mine.length ? mine : all).map((x) => ({ id: x.id, alias: x.alias, state: x.state, cooper: x.id.startsWith("cooper_") || x.alias.startsWith("[Cooper]") })));
+        L(`    ${C.cyan}🎬 list_scripts -> ${all.length} total, ${mine.length} cooper${C.reset}`); log.push(`listed ${all.length} scripts`);
+      }
+      else if (t.name === "delete_script") {
+        const id = String(a.id ?? "").trim().replace(/^script\./, "");
+        if (!id) out = "no id given";
+        else { try { await ha.deleteScript(id); out = `deleted script ${id}`; lastConfirmation = "Removed that script."; } catch (e) { out = `ERROR deleting: ${String(e).slice(0, 200)}`; } }
+        L(`    ${C.cyan}🎬 delete_script(${id}) -> ${out}${C.reset}`); log.push(out);
       }
       else if (t.name === "get_live_context") {
         const ents = await ha.liveContext(a.domains);
@@ -316,27 +319,6 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         L(`    ${C.cyan}📷 look_at_camera(${names.join(",")}) -> ${nImg} image(s)${C.reset}`); log.push(`looked at ${nImg} camera(s)`);
         results.push({ type: "tool_result", tool_use_id: t.id, content: blocks.length ? blocks : [{ type: "text", text: "no images" }] });
         continue;
-      }
-      else if (t.name === "schedule_actions") {
-        const steps: any[] = Array.isArray(a.steps) ? a.steps.slice(0, 30) : [];
-        await ensureIds();
-        const planned: string[] = [];
-        const valid: Array<{ afterSeconds: number; domain: string; service: string; data?: Record<string, unknown>; note?: string }> = [];
-        for (const s of steps) {
-          const delay = Math.max(0, Number(s.after_seconds) || 0);
-          const tier = tierFor(s.domain, s.service);
-          const ids: string[] = [s.data?.entity_id].flat().filter(Boolean);
-          const missing = ids.filter((id) => !knownIds!.has(id));
-          if (missing.length) { planned.push(`✗ no such entity: ${missing.join(",")}`); continue; }
-          if (tier !== "auto") { planned.push(`✗ ${s.domain}.${s.service} needs confirmation — not scheduling`); continue; }
-          valid.push({ afterSeconds: delay, domain: s.domain, service: s.service, data: s.data, note: s.note });
-          planned.push(`+${delay}s ${s.domain}.${s.service} ${s.note ?? ""}`);
-        }
-        // Hand the validated steps to the host, which persists them and fires due steps on a tick —
-        // so the sequence survives restarts, shows in /healthz, and cancel_watch can stop it as a unit.
-        const sched = valid.length && hooks?.scheduleSequence ? hooks.scheduleSequence(goal, valid) : "";
-        out = planned.length ? `scheduled ${valid.length}/${steps.length}${sched ? ` (${sched})` : ""}:\n${planned.join("\n")}` : "no steps";
-        L(`    ${C.cyan}⏲ schedule_actions -> ${valid.length}/${steps.length} step(s)${sched ? ` ${sched}` : ""}${C.reset}`); log.push(`scheduled ${valid.length} timed action(s)`);
       }
       else if (t.name === "get_forecast") {
         const fc = await ha.getForecast(a.type === "hourly" ? "hourly" : "daily");

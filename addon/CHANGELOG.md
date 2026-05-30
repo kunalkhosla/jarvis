@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.0
+- **Cooper is now a routing agent over Home Assistant — the bespoke watch/automation engine is gone.**
+  Instead of reimplementing an automation engine feature-by-feature (watch/do/task/sequence goal types,
+  `reactive`/`whileAway`/`untilPresent`/`firesLeft` flags, NL-time regexes, intent regexes), Cooper
+  reads each request and **routes by its nature**: answer a question, do a reversible action, ask Yes/No
+  for a risky one, or — for anything ongoing/conditional/scheduled/recurring — **author a native HA
+  automation or script** that HA runs itself. Durable behavior lives in HA (cheap triggers, survives
+  restarts, visible/editable in the UI); Cooper no longer polls. For the smart step, an authored rule
+  calls `conversation.process` back to `conversation.cooper` to judge ("is this actually a delivery?").
+- **New: `create_script` / `list_scripts` / `delete_script`** — Cooper authors native HA scripts for
+  on-demand timed sequences (run the pump 10 min, presence simulation, multi-zone sprinkler runs) with
+  real `delay` steps instead of holding the sequence in the add-on. Same `[Cooper]` / `cooper_` tagging
+  as automations.
+- **Authored rules are guardrailed at authoring time.** Because a native rule runs with no human in the
+  loop, every service it references is tiered: a forbidden action is refused, and a *risky* one is
+  refused with a nudge to notify the user (or call back to judge) instead of doing it autonomously — so
+  authoring can't bypass the per-action confirm safeguard.
+- **The agent is grounded in the current date/time and your real notify targets**, so it authors
+  "at 11:45pm" / "today" / "every evening" rules and alert actions correctly.
+- **Removed:** `start_watch` / `cancel_watch` / `schedule_actions` tools, the watch/heartbeat loops,
+  scheduled tasks/sequences, the morning briefing, and all intent regexes. A morning briefing (and any
+  recurring routine) is now something Cooper authors as a normal time-triggered automation. The
+  `heartbeat_seconds` and `briefing_time` options are gone. Conversation, guardrails, budget tracking,
+  the kill-switch, and in-chat/push Yes-No confirmations are unchanged.
+
 ## 0.28.0
 - **v2 foundation — Cooper authors native HA automations.** New `create_automation` /
   `list_automations` / `delete_automation` tools: Cooper writes real Home Assistant automations (via

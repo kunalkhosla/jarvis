@@ -8,10 +8,8 @@ export interface Config {
   searchProvider: "none" | "brave" | "tavily";
   searchKey: string;
   observeMode: boolean;
-  heartbeatSeconds: number;
-  maxLlmCallsPerHour: number; // cost cap: auto evals paused past this (rolling hour)
-  maxLlmCallsPerDay: number;  // cost cap: auto evals paused past this (rolling day)
-  briefingTime: string;       // local HH:MM for the daily morning briefing ("" = off)
+  maxLlmCallsPerHour: number; // cost cap: LLM evals gated past this (rolling hour)
+  maxLlmCallsPerDay: number;  // cost cap: LLM evals gated past this (rolling day)
   notifyTargets: string[];
   haBaseUrl: string; // REST base, e.g. http://supervisor/core/api
   haWsUrl: string;   // websocket, e.g. ws://supervisor/core/websocket
@@ -41,10 +39,8 @@ export function loadConfig(): Config {
     searchProvider: (get("search_provider", "SEARCH_PROVIDER", "none") as Config["searchProvider"]),
     searchKey: get("search_api_key", "SEARCH_API_KEY"),
     observeMode: (opts.observe_mode as boolean) ?? process.env.OBSERVE_MODE !== "false",
-    heartbeatSeconds: Number(opts.heartbeat_seconds ?? process.env.HEARTBEAT_SECONDS ?? 600),
     maxLlmCallsPerHour: Number(opts.max_llm_calls_per_hour ?? process.env.MAX_LLM_CALLS_PER_HOUR ?? 30),
     maxLlmCallsPerDay: Number(opts.max_llm_calls_per_day ?? process.env.MAX_LLM_CALLS_PER_DAY ?? 250),
-    briefingTime: get("briefing_time", "BRIEFING_TIME", ""),
     notifyTargets: (opts.notify_targets as string[]) ?? [],
     haBaseUrl,
     haWsUrl,

@@ -26,6 +26,12 @@ export class HaClient {
 
   getStates = (): Promise<EntityState[]> => this.rest("/states");
 
+  /** Read ONE entity's current state (cheaper than getStates when you only need a single value, e.g.
+   *  the kill-switch). Returns null if it doesn't exist (404). */
+  async getState(entityId: string): Promise<EntityState | null> {
+    try { return await this.rest(`/states/${entityId}`); } catch { return null; }
+  }
+
   /** State history for `entityIds` over [startMs, endMs] — HA's period endpoint, one chronological
    *  array per entity ({state, last_changed}, full attributes on the first point). For "what happened"
    *  questions (get_live_context is current-state only). significant_changes_only drops attribute noise. */
@@ -82,6 +88,25 @@ export class HaClient {
     return (await this.getStates())
       .filter((s) => s.entity_id.startsWith("automation."))
       .map((s) => ({ entity_id: s.entity_id, id: s.attributes?.id as string | undefined, alias: (s.attributes?.friendly_name as string) ?? s.entity_id, state: s.state }));
+  }
+
+  // ---- Native HA scripts (Cooper authors these for on-demand timed SEQUENCES; HA runs them) ----
+  /** Create or replace a script by id, then reload so it's live. `config` is the script body
+   *  (alias, sequence:[...], mode?). Runnable via script.turn_on / script.<id>. */
+  async upsertScript(id: string, config: Record<string, unknown>): Promise<void> {
+    await this.rest(`/config/script/config/${id}`, { method: "POST", body: JSON.stringify(config) });
+    await this.callService("script", "reload");
+  }
+  /** Delete a script's config by id, then reload. */
+  async deleteScript(id: string): Promise<void> {
+    await this.rest(`/config/script/config/${id}`, { method: "DELETE" });
+    await this.callService("script", "reload");
+  }
+  /** List scripts (entity_id, the config `id`/object_id for edit/delete, friendly alias, state). */
+  async scripts(): Promise<Array<{ entity_id: string; id: string; alias: string; state: string }>> {
+    return (await this.getStates())
+      .filter((s) => s.entity_id.startsWith("script."))
+      .map((s) => ({ entity_id: s.entity_id, id: s.entity_id.split(".")[1], alias: (s.attributes?.friendly_name as string) ?? s.entity_id, state: s.state }));
   }
 
   /** HA's own weather forecast for the home's exact location. Discovers the weather entity by
