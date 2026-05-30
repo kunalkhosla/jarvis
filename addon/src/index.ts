@@ -284,6 +284,20 @@ const hooks: Hooks = {
   },
 };
 
+// Register a PERSISTENT watch-goal from a conversation (the agent's start_watch tool). The current
+// conversation eval already established the baseline, so there's no separate initial eval — the watch
+// engine takes over on future events. lastRun=now so it doesn't immediately re-fire.
+function registerWatch(goalText: string): string {
+  const now = Date.now();
+  const text = goalText.trim();
+  const g = store.addGoal(text, now, now, parseExpiry(text, now), wantsPresenceStandDown(text), wantsStandingWhileAway(text));
+  goals.push(g);
+  header(`👁 watch registered (start_watch) #${g.id}: "${text}"${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.whileAway ? " [standing while-away]" : ""}`);
+  store.logAction(now, g.id, "watch:create", text);
+  if (g.whileAway) checkPresenceStandDown(now).catch(() => {});
+  return `Watch #${g.id} is now active — I'll re-check on relevant events and alert you until you say stop${g.expires ? ` (expires ${new Date(g.expires).toLocaleString()})` : ""}.`;
+}
+
 // ---- Single entrypoint for a user utterance (stop / watch / do) → reply text ----
 // Shared by the HTTP /ask endpoint (the custom conversation integration) and the legacy input_text
 // bridge. Does the deterministic stop/watch routing, runs the goal, and RETURNS the reply string —
@@ -344,8 +358,11 @@ async function handleUtterance(text: string, history?: Turn[], session?: string)
   // Any non-watch request → run it now (control / schedule / answer) and report the result back.
   header(`📥 request: "${text}"`);
   store.logAction(tnow, null, "ask:do", text);
+  // start_watch is offered ONLY here (a conversation do-turn) — never on autonomous/watch-engine evals,
+  // so a watch eval can't spawn nested watches.
+  const doHooks: Hooks = { ...askHooks, startWatch: registerWatch };
   try {
-    return await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${histCtx}`, budget, askHooks);
+    return await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${histCtx}`, budget, doHooks);
   } catch (e) { log(`   ${C.red}request error: ${e}${C.reset}`); return `Sorry — I hit an error: ${e}`; }
 }
 

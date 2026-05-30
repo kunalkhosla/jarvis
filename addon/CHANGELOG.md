@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.24.0
+- **Cooper sets up its own watches now — no more missed intent or false "I'm watching".** Previously a
+  deterministic keyword regex decided watch-vs-one-shot; phrasings like *"if you see motion on any
+  camera, send me a notification"* matched nothing, so the request ran **once** and Cooper then
+  **falsely claimed** it was monitoring. New `start_watch` tool: on a conversation turn the agent
+  registers a persistent watch itself whenever it recognizes ongoing monitoring / conditional alerting
+  ("if/when you see X notify me", "while I'm asleep/away, watch…"). The system prompt now forbids
+  claiming to watch/monitor/alert unless `start_watch` was actually called. The keyword fast-path stays
+  for obvious cases; `start_watch` is offered **only** on conversation turns, so autonomous watch
+  evals can't spawn nested watches.
+
 ## 0.23.0
 - **The `input_text` voice bridge is gone.** Cooper is now reached only through the **Cooper
   conversation integration** (`custom_components/cooper/`) over `POST /ask`. Removed: the
