@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1
+- **Streamed progress is now spoken, not just shown.** The step statuses ended in "…", and HA's
+  streaming TTS only speaks complete sentences — so progress appeared as text but stayed silent until
+  the final reply (~15-20s of no audio). Each status is now a complete sentence ending in a period
+  ("Checking the home." / "Looking at the camera."), so the voice starts within a couple of seconds.
+
 ## 1.4.0
 - **Streaming responses — running feedback instead of dead air.** A long agentic turn (authoring,
   camera checks) used to sit silent for 30-50s, long enough that the Assist **voice pipeline timed out

@@ -143,18 +143,20 @@ export interface Hooks {
 // Short, speakable status for the tools used in a step — streamed to the user as the turn runs so a
 // long agentic turn gives running feedback (and the voice pipeline gets a response before it times out)
 // instead of 40s of silence. Returns null for a step worth no narration.
+// NOTE: each status must be a COMPLETE SENTENCE ending in a period — HA's streaming TTS only speaks
+// once it sees a sentence boundary, so a trailing "…" gets buffered (silent) until the final reply.
 function stepNarration(toolNames: string[]): string | null {
   const has = (n: string) => toolNames.includes(n);
-  if (has("create_automation")) return "Setting up the automation…";
-  if (has("create_script")) return "Setting up the sequence…";
-  if (has("delete_automation") || has("delete_script")) return "Removing that…";
-  if (has("look_at_camera")) return "Looking at the camera…";
-  if (has("call_service")) return "On it…";
-  if (has("get_history")) return "Looking back over what happened…";
-  if (has("get_forecast")) return "Checking the forecast…";
-  if (has("web_search")) return "Searching…";
-  if (has("list_automations") || has("list_scripts")) return "Checking what's set up…";
-  if (has("get_home_map") || has("get_live_context")) return "Checking the home…";
+  if (has("create_automation")) return "Setting up the automation.";
+  if (has("create_script")) return "Setting up the sequence.";
+  if (has("delete_automation") || has("delete_script")) return "Removing that.";
+  if (has("look_at_camera")) return "Looking at the camera.";
+  if (has("call_service")) return "On it.";
+  if (has("get_history")) return "Looking back over what happened.";
+  if (has("get_forecast")) return "Checking the forecast.";
+  if (has("web_search")) return "Searching.";
+  if (has("list_automations") || has("list_scripts")) return "Checking what's set up.";
+  if (has("get_home_map") || has("get_live_context")) return "Checking the home.";
   return null;
 }
 
