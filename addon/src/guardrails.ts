@@ -65,6 +65,39 @@ export function collectServices(node: unknown, out: string[] = []): string[] {
   return out;
 }
 
+/** Every entity_id referenced anywhere in a config — under any `entity_id` key (string or list) and
+ *  inside any `/api/camera_proxy/<entity>` image path. Used to reject authored rules that reference
+ *  entities that don't exist (a deterministic check the LLM can't fake its way past). */
+export function collectEntityIds(node: unknown, out: Set<string> = new Set()): Set<string> {
+  if (Array.isArray(node)) { for (const v of node) collectEntityIds(v, out); return out; }
+  if (node && typeof node === "object") {
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (k === "entity_id") for (const id of [v].flat()) { if (typeof id === "string" && /^[a-z_]+\.[a-z0-9_]+$/.test(id)) out.add(id); }
+      else collectEntityIds(v, out);
+    }
+    return out;
+  }
+  if (typeof node === "string") { const m = node.match(/\/api\/camera_proxy\/([a-z_]+\.[a-z0-9_]+)/); if (m) out.add(m[1]); }
+  return out;
+}
+
+/** Lint authored notify actions: the mobile-app companion attaches a photo from `data.image`
+ *  ("/api/camera_proxy/<cam>"); a bare `data.camera` key is silently ignored. Returns warnings. */
+export function lintNotifyPhotos(node: unknown, out: string[] = []): string[] {
+  if (Array.isArray(node)) { for (const n of node) lintNotifyPhotos(n, out); return out; }
+  if (node && typeof node === "object") {
+    const o = node as Record<string, any>;
+    const act = o.service ?? o.action;
+    if (typeof act === "string" && act.startsWith("notify.")) {
+      const data = o.data?.data ?? o.data;
+      if (data && typeof data === "object" && "camera" in data && !("image" in data))
+        out.push(`${act} uses data.camera, which the app ignores — attach a photo with data.image:"/api/camera_proxy/<camera_entity>" instead`);
+    }
+    for (const v of Object.values(o)) lintNotifyPhotos(v, out);
+  }
+  return out;
+}
+
 /** Vet the actions INSIDE an authored automation/script before it's written. An authored rule runs
  *  natively in HA with no human in the loop, so a risky action it performs would bypass the per-call
  *  confirm flow entirely — hence we tier every service it references and let the caller refuse to

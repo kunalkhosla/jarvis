@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Config } from "./config.js";
 import type { HaClient } from "./ha.js";
-import { tierFor, vetConfig } from "./guardrails.js";
+import { tierFor, vetConfig, collectServices, collectEntityIds, lintNotifyPhotos } from "./guardrails.js";
 import type { Budget } from "./budget.js";
 import { C, L, header } from "./log.js";
 
@@ -117,6 +117,21 @@ function resolveCameras(raw: string, known: Set<string>, bad: Set<string> = new 
   return [...new Set(matches.sort((a, b) => rank(a) - rank(b)).map(swap))];
 }
 
+/** Deterministic, sandboxed validation of an authored automation/script BEFORE it's written — host
+ *  code, no LLM, so it can't hallucinate the way an LLM self-check can. Verifies every referenced
+ *  entity and every service call actually EXISTS (HA saves a rule that names a phantom service/entity
+ *  and then fails silently at runtime — this catches it), and lints notify photo attachments. Returns
+ *  a list of concrete problems; empty = clean. */
+async function validateConfig(ha: HaClient, config: unknown): Promise<string[]> {
+  const problems: string[] = [];
+  const [states, services] = await Promise.all([ha.getStates(), ha.services()]);
+  const ids = new Set(states.map((s) => s.entity_id));
+  for (const e of collectEntityIds(config)) if (!ids.has(e)) problems.push(`entity "${e}" does not exist — use a real entity_id (check get_live_context)`);
+  for (const s of new Set(collectServices(config))) if (services.size && !services.has(s)) problems.push(`service "${s}" does not exist — use a real one (e.g. a real notify.* target; check NOTIFY TARGETS)`);
+  lintNotifyPhotos(config, problems);
+  return problems;
+}
+
 /** Runtime hooks the guardian provides: a kill-switch check and an interactive-confirmation sender.
  *  v2 has no watch/sequence engine — durable behavior is authored as native HA automations/scripts —
  *  so the only hooks are the kill-switch and the confirm sender. */
@@ -217,15 +232,21 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         if (vet.never.length) out = `REFUSED: this automation would perform forbidden action(s): ${vet.never.join(", ")}. Not creating it.`;
         else if (vet.confirm.length) out = `REFUSED: this automation would AUTONOMOUSLY do risky action(s) (${vet.confirm.join(", ")}) with no human in the loop — that bypasses the confirm safeguard. Re-author it so the rule NOTIFIES the user (or calls conversation.process to alert with camera context) and a person decides; keep only reversible actions automatic.`;
         else {
-          try {
-            await ha.upsertAutomation(id, cfg2);
-            // Hand the STORED rule back so the agent self-verifies it against the full request before
-            // claiming done (general check — catches wrong entities, no-op lifecycle, missing alert).
-            const stored = await ha.getAutomationConfig(id).catch(() => cfg2);
-            out = `created automation ${id} ("${cfg2.alias}"). VERIFY this stored rule against the user's FULL request before you claim it's set up — every clause present? triggers on the right entities/place/type? lifecycle correct (today/once/N-times)? does the alert actually deliver? If anything's off, call create_automation again with the SAME id to fix it.\nSTORED: ${JSON.stringify(stored).slice(0, 5000)}`;
-            lastConfirmation = `Set it up — automation "${cfg2.alias}" is live.`;
+          // Deterministic gate: refuse to write a rule that names a phantom entity/service (caught here,
+          // not silently at 3am when it fails to fire). The agent fixes and re-authors.
+          const problems = await validateConfig(ha, cfg2);
+          if (problems.length) out = `NOT CREATED — these are real, checked problems; fix them and call create_automation again with the SAME id:\n- ${problems.join("\n- ")}`;
+          else {
+            try {
+              await ha.upsertAutomation(id, cfg2);
+              // Hand the STORED rule back so the agent also self-verifies SEMANTICS (does it match the
+              // request?) — the deterministic check above already guaranteed entities/services are real.
+              const stored = await ha.getAutomationConfig(id).catch(() => cfg2);
+              out = `created automation ${id} ("${cfg2.alias}"). VERIFY this stored rule against the user's FULL request before you claim it's set up — every clause present? triggers on the right entities/place/type? lifecycle correct (today/once/N-times)? If anything's off, call create_automation again with the SAME id to fix it.\nSTORED: ${JSON.stringify(stored).slice(0, 5000)}`;
+              lastConfirmation = `Set it up — automation "${cfg2.alias}" is live.`;
+            }
+            catch (e) { out = `ERROR creating automation: ${String(e).slice(0, 200)}`; }
           }
-          catch (e) { out = `ERROR creating automation: ${String(e).slice(0, 200)}`; }
         }
         L(`    ${C.cyan}🤖 create_automation(${id}) -> ${out}${C.reset}`); log.push(out);
       }
@@ -253,13 +274,17 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         if (vet.never.length) out = `REFUSED: this script would perform forbidden action(s): ${vet.never.join(", ")}. Not creating it.`;
         else if (vet.confirm.length) out = `REFUSED: this script would perform risky action(s) (${vet.confirm.join(", ")}) unattended. Scripts are for reversible timed sequences (lights/switches/media/pump/watering) — for a risky action, ask the user to confirm it directly instead of scripting it.`;
         else {
-          try {
-            await ha.upsertScript(id, sc);
-            const stored = await ha.getScriptConfig(id).catch(() => sc);
-            out = `created script ${id} ("${sc.alias}") — run with script.turn_on entity_id script.${id}. VERIFY this stored sequence matches the full request (every step/entity/delay correct?) before claiming done; if not, create_script again with the same id.\nSTORED: ${JSON.stringify(stored).slice(0, 4000)}`;
-            lastConfirmation = `Set it up — script "${sc.alias}" is ready.`;
+          const problems = await validateConfig(ha, sc);
+          if (problems.length) out = `NOT CREATED — fix these real problems and call create_script again with the SAME id:\n- ${problems.join("\n- ")}`;
+          else {
+            try {
+              await ha.upsertScript(id, sc);
+              const stored = await ha.getScriptConfig(id).catch(() => sc);
+              out = `created script ${id} ("${sc.alias}") — run with script.turn_on entity_id script.${id}. VERIFY this stored sequence matches the full request (every step/entity/delay correct?) before claiming done; if not, create_script again with the same id.\nSTORED: ${JSON.stringify(stored).slice(0, 4000)}`;
+              lastConfirmation = `Set it up — script "${sc.alias}" is ready.`;
+            }
+            catch (e) { out = `ERROR creating script: ${String(e).slice(0, 200)}`; }
           }
-          catch (e) { out = `ERROR creating script: ${String(e).slice(0, 200)}`; }
         }
         L(`    ${C.cyan}🎬 create_script(${id}) -> ${out}${C.reset}`); log.push(out);
       }

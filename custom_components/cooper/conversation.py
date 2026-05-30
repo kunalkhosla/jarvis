@@ -58,8 +58,17 @@ class CooperConversationEntity(conversation.ConversationEntity):
         conv_id = user_input.conversation_id or _new_conversation_id()
         history = self._history.get(conv_id, [])
 
+        # Forward WHO/WHERE this came from so the brain can default "ping me" to the caller's own
+        # phone (no guessing) and know who's talking. HA carries both on the conversation input.
+        user_id = user_input.context.user_id if user_input.context else None
         try:
-            reply = await self._api.ask(user_input.text, conv_id, history)
+            reply = await self._api.ask(
+                user_input.text,
+                conv_id,
+                history,
+                device_id=user_input.device_id,
+                user_id=user_id,
+            )
         except CooperApiError as err:
             reply = f"I can't reach the Cooper guardian right now ({err})."
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0
+- **Deterministic validation of authored rules (sandboxed, no LLM).** Before an automation/script is
+  saved, the host checks — against the real registries — that every `entity_id` and every
+  `domain.service` it references actually EXISTS, and lints notify photo attachments (`data.image` vs a
+  silently-ignored `data.camera`). HA will happily save a rule that calls a phantom service and then
+  fail silently at 3am; this catches it at authoring and makes the agent fix it. Can't be fooled the way
+  an LLM self-check can. (Found a real case: a delivery watch that named a `notify.mobile_app_galaxy_s23_ultra`
+  service that doesn't exist — the alert would never have fired.)
+- **Cooper knows which phone you're on.** The conversation integration now forwards the caller's
+  `device_id` and `user_id`, so when you say "ping me" / "text me," Cooper targets *your own phone's*
+  notify service (resolved from the device) instead of guessing — and it knows who's speaking. Requires
+  updating the **Cooper integration via HACS to 0.2.0** as well as this add-on.
+
 ## 1.2.0
 - **Stop encoding per-use-case rules; reason from grounded context + self-verify.** The prompt was
   drifting back toward `O(use-cases)` special cases ("deliveries go to the front door", "AI sensors beat

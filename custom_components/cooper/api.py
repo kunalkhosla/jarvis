@@ -41,9 +41,15 @@ class CooperApi:
         text: str,
         session_id: str,
         history: list[dict[str, str]] | None = None,
+        device_id: str | None = None,
+        user_id: str | None = None,
     ) -> str:
         """Send one utterance to Cooper and return the spoken reply."""
         payload = {"text": text, "session_id": session_id, "history": history or []}
+        if device_id:
+            payload["device_id"] = device_id
+        if user_id:
+            payload["user_id"] = user_id
         try:
             async with self._session.post(
                 f"{self._url}/ask",

@@ -69,6 +69,20 @@ export class HaClient {
   callService = (domain: string, service: string, data: Record<string, unknown> = {}) =>
     this.rest(`/services/${domain}/${service}`, { method: "POST", body: JSON.stringify(data) });
 
+  /** Every registered service as a Set of "domain.service" — so an authored rule can be checked for
+   *  hallucinated service calls (e.g. a notify target that doesn't exist) before it's saved. Cached. */
+  private _services: Set<string> | null = null;
+  async services(): Promise<Set<string>> {
+    if (this._services) return this._services;
+    const s = new Set<string>();
+    try {
+      const data = (await this.rest("/services")) as Array<{ domain: string; services: Record<string, unknown> }>;
+      for (const d of data) for (const svc of Object.keys(d.services ?? {})) s.add(`${d.domain}.${svc}`);
+    } catch { /* services optional */ }
+    this._services = s;
+    return s;
+  }
+
   /** Render an HA Jinja template (e.g. for area/registry data not exposed over plain REST). */
   async template(t: string): Promise<string> {
     const r = await fetch(`${this.cfg.haBaseUrl}/template`, {

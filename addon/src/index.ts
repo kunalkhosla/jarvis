@@ -30,10 +30,11 @@ createServer(async (req, res) => {
       let raw = ""; for await (const c of req) raw += c;
       let body: any;
       try { body = JSON.parse(raw || "{}"); } catch { return json(400, { error: "invalid JSON" }); }
-      const { text, history, session_id } = body;
+      const { text, history, session_id, device_id, user_id } = body;
       if (!text || typeof text !== "string") return json(400, { error: "text (string) required" });
       try {
-        const reply = await handleUtterance(text.trim(), Array.isArray(history) ? history : undefined, typeof session_id === "string" ? session_id : undefined);
+        const reply = await handleUtterance(text.trim(), Array.isArray(history) ? history : undefined, typeof session_id === "string" ? session_id : undefined,
+          typeof device_id === "string" ? device_id : undefined, typeof user_id === "string" ? user_id : undefined);
         return json(200, { reply });
       } catch (e) { return json(500, { error: String(e) }); }
     }
@@ -120,8 +121,34 @@ function requestSessionConfirm(session: string, domain: string, service: string,
 const hooks: Hooks = { paused: () => paused, requestConfirm };
 
 // ---- Single entrypoint for an utterance (conversation turn OR an automation's judge callback) ----
+// Slugify like HA does (lowercase, non-alphanumeric → underscore) so we can derive a device's
+// companion-app notify service (notify.mobile_app_<slug>) from its name.
+const slugify = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+
+/** Resolve WHO/WHERE a turn came from into a context line: the caller's own phone (so "ping me"
+ *  targets it, no guessing) and their name. Best-effort — empty string if nothing resolves. */
+async function callerContext(deviceId?: string, userId?: string): Promise<string> {
+  const bits: string[] = [];
+  try {
+    if (deviceId) {
+      const name = (await ha.template(`{{ device_attr('${deviceId}','name_by_user') or device_attr('${deviceId}','name') or '' }}`)).trim();
+      if (name) {
+        const svc = `notify.mobile_app_${slugify(name)}`;
+        if ((await ha.services()).has(svc))
+          bits.push(`They're talking to you from "${name}". When they ask you to notify / ping / text / alert THEM — right now or inside an automation you author — use ${svc} (their own phone). Don't guess a different target.`);
+        else bits.push(`They're talking to you from the device "${name}".`);
+      }
+    }
+    if (userId) {
+      const person = (await ha.template(`{{ states.person | selectattr('attributes.user_id','eq','${userId}') | map(attribute='name') | join(', ') }}`)).trim();
+      if (person) bits.push(`The person speaking is ${person}.`);
+    }
+  } catch { /* best effort */ }
+  return bits.length ? `\n\nCALLER: ${bits.join(" ")}` : "";
+}
+
 export interface Turn { role: string; text: string }
-async function handleUtterance(text: string, history?: Turn[], session?: string): Promise<string> {
+async function handleUtterance(text: string, history?: Turn[], session?: string, deviceId?: string, userId?: string): Promise<string> {
   const tnow = Date.now();
   await refreshPaused(); // keep the kill-switch fresh per turn (v2 has no state_changed subscription)
 
@@ -180,10 +207,12 @@ async function handleUtterance(text: string, history?: Turn[], session?: string)
     if (lines.length) mgmtCtx = `\n\nYour active [Cooper] automations/scripts — if the user implies one is no longer needed ("nevermind", "I got the package", "they're here", "stop that"), delete it; reuse the id to edit:\n${lines.join("\n")}`;
   } catch { /* management context is best-effort */ }
 
+  const callerCtx = await callerContext(deviceId, userId);
+
   header(`📥 request: "${text}"`);
   store.logAction(tnow, null, "ask:do", text);
   try {
-    return await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${mgmtCtx}${histCtx}`, budget, askHooks);
+    return await runGoal(cfg, ha, text, `(handle this now; reply in one or two short sentences the assistant can speak aloud)${callerCtx}${mgmtCtx}${histCtx}`, budget, askHooks);
   } catch (e) { log(`   ${C.red}request error: ${e}${C.reset}`); return `Sorry — I hit an error: ${e}`; }
 }
 
