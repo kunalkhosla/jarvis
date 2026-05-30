@@ -121,15 +121,16 @@ Two cooperating layers, both inside Home Assistant:
    guard**, with **SQLite** persistence. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 A lightweight **bridge** links them: the front-end forwards anything agentic (watching, scheduling,
-presence simulation, camera checks) to the Guardian, which acts and notifies the result — so the
-voice assistant becomes a thin mic for the Guardian's full toolset.
+presence simulation, camera checks) to the Guardian — so the voice assistant becomes a thin mic for
+the Guardian's full toolset. Quick requests come back **spoken inline** (the bridge waits a few
+seconds for the Guardian's reply); longer tasks are acknowledged and the result arrives by push.
 
 ## Install & setup
 
 Cooper Guardian installs like any Home Assistant add-on — **Settings → Add-ons → Add-on Store → ⋮ →
 Repositories**, add `https://github.com/kunalkhosla/cooper`, then install **Cooper Guardian**. On
-first run it self-provisions the voice bridge (an `input_text` helper + an "Ask Cooper" script,
-exposed to Assist).
+first run it self-provisions the voice bridge (request + response `input_text` helpers + an "Ask
+Cooper" script, exposed to Assist).
 
 > **Full setup — options, the `/healthz` + `/goal` control surface, and the one manual step (a
 > routing instruction for your conversation agent) — lives in the [add-on setup guide](addon/README.md)**

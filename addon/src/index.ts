@@ -136,12 +136,31 @@ function interesting(entityId: string, st: EntityState): boolean {
 }
 
 const WATCH_REQUEST = "input_text.cooper_watch_request"; // bridge from the HA conversation agent
+const WATCH_RESPONSE = "input_text.cooper_response"; // Cooper writes its concise reply here; the Ask Cooper script reads it back so the assistant SPEAKS it inline
 const WATCH_INTENT = /\b(watch|keep an eye|monitor|guard|look after|alert me|notify me if|let me know if|keep watch)\b/i;
 // Stop/stand-down intent. Checked BEFORE WATCH_INTENT (the word "watch" appears in both "watch the
 // cameras" and "stop watching") — deterministic, no LLM, so turning watches off always works.
 const STOP_INTENT = /\b(stop|cancel|remove|delete|clear|disable|end|quit|turn\s*off|forget)\b[^.]{0,24}\b(watch|watching|watches|monitor|monitoring|keeping an eye|guard)\b|\bstand[\s-]?down\b/i;
 const PAUSE_SWITCH = "input_boolean.cooper_pause"; // kill-switch: ON = halt all device actions
 const notifyAll = (msg: string) => { for (const tgt of cfg.notifyTargets) ha.notify(tgt, "Cooper", msg).catch(() => {}); };
+
+// ---- Synchronous wait-bridge: speak quick answers inline, push slow ones ----
+// The Ask Cooper script BLOCKS (up to SCRIPT_WAIT_S) waiting for Cooper to write a reply to
+// WATCH_RESPONSE, so the assistant can speak Cooper's answer in the same turn instead of only "handing
+// it over". Long agentic tasks blow past that window: the script times out with "On it, I'll notify
+// you" and we deliver the result by push. We can't see whether the script is still waiting, so we
+// approximate it by elapsed time — both clocks start when the request helper is set (≈ the same
+// instant). If we answer within BRIDGE_INLINE_MS the script almost certainly spoke it, so we skip the
+// push; the small gap up to SCRIPT_WAIT_S errs toward "also push" (redundant, never a dropped reply).
+const BRIDGE_INLINE_MS = 7_500;
+const setResponse = (text: string) =>
+  ha.callService("input_text", "set_value", { entity_id: WATCH_RESPONSE, value: String(text).slice(0, 255) }).catch(() => {});
+// Deliver a bridge reply: always make it readable by the waiting script; push only if we were too slow
+// for the inline window (the script already said "on it" and stopped waiting).
+function deliverBridgeReply(startedAt: number, text: string) {
+  setResponse(text);
+  if (Date.now() - startedAt >= BRIDGE_INLINE_MS) notifyAll(text);
+}
 
 // ---- Kill-switch + interactive Yes/No confirmation (the guardrail "hooks" the agent calls) ----
 let paused = false; // mirrors PAUSE_SWITCH; updated from state_changed + read at boot
@@ -250,19 +269,33 @@ const hooks: Hooks = {
 
 // Self-provision the voice bridge on first run, so setup is one paste (the routing prompt), not a
 // manual helper + script + exposure. Idempotent: only creates what's missing.
+const SCRIPT_WAIT_S = 9; // how long Ask Cooper blocks for an inline reply before falling back to async push (> BRIDGE_INLINE_MS, so the host's "spoke it inline" guess never drops a reply)
 const ASK_COOPER_SCRIPT = {
   alias: "Ask Cooper",
-  description: "Hand ANY request to the Cooper guardian agent — watching/monitoring, presence simulation, scheduling timed sequences, camera checks, or multi-step tasks. Cooper runs it and notifies the result. Use for anything beyond simple one-shot device control or direct questions.",
+  description: "Hand ANY request to the Cooper guardian agent — watching/monitoring, presence simulation, scheduling timed sequences, camera checks, or multi-step tasks. Cooper runs it and returns its reply (or, for longer tasks, acknowledges and notifies the result later). Use for anything beyond simple one-shot device control or direct questions. Speak the returned reply to the user.",
   fields: { goal: { description: "The full request, in plain language", required: true, selector: { text: {} } } },
   mode: "queued",
-  sequence: [{ action: "input_text.set_value", target: { entity_id: WATCH_REQUEST }, data: { value: "{{ goal }}" } }],
+  sequence: [
+    // 1. Clear last turn's reply so the wait below can't read a stale one.
+    { action: "input_text.set_value", target: { entity_id: WATCH_RESPONSE }, data: { value: "" } },
+    // 2. Hand the request to the guardian (the add-on watches this helper).
+    { action: "input_text.set_value", target: { entity_id: WATCH_REQUEST }, data: { value: "{{ goal }}" } },
+    // 3. Block until Cooper writes a reply, or give up after SCRIPT_WAIT_S.
+    { wait_template: `{{ states('${WATCH_RESPONSE}') | trim | length > 0 }}`, timeout: { seconds: SCRIPT_WAIT_S }, continue_on_timeout: true },
+    // 4. Return Cooper's reply for the assistant to speak; on timeout, an ack (Cooper pushes the result).
+    { variables: { cooper_reply: { reply: `{% if states('${WATCH_RESPONSE}') | trim | length > 0 %}{{ states('${WATCH_RESPONSE}') }}{% else %}On it — I'll work on that and notify you when it's done.{% endif %}` } } },
+    { stop: "replied", response_variable: "cooper_reply" },
+  ],
 };
 async function provisionBridge() {
   try {
     const states = await ha.getStates();
     const has = (id: string) => states.some((s) => s.entity_id === id);
     if (!has(WATCH_REQUEST)) { await ha.wsCall({ type: "input_text/create", name: "Cooper Watch Request", max: 255 }); log(`${C.green}✓ created ${WATCH_REQUEST}${C.reset}`); }
-    if (!has("script.cooper_watch")) { await ha.postConfig("/config/script/config/cooper_watch", ASK_COOPER_SCRIPT); log(`${C.green}✓ created script.cooper_watch (Ask Cooper)${C.reset}`); }
+    if (!has(WATCH_RESPONSE)) { await ha.wsCall({ type: "input_text/create", name: "Cooper Response", max: 255 }); log(`${C.green}✓ created ${WATCH_RESPONSE}${C.reset}`); }
+    // Always (re)write the script — it's a self-provisioned bridge, and upserting keeps the wait/reply
+    // sequence current on existing installs after an add-on update (postConfig is an idempotent upsert).
+    await ha.postConfig("/config/script/config/cooper_watch", ASK_COOPER_SCRIPT); log(`${C.green}✓ provisioned script.cooper_watch (Ask Cooper)${C.reset}`);
     if (!has(PAUSE_SWITCH)) { await ha.wsCall({ type: "input_boolean/create", name: "Cooper Pause" }); log(`${C.green}✓ created ${PAUSE_SWITCH} (kill-switch)${C.reset}`); }
     await ha.wsCall({ type: "homeassistant/expose_entity", assistants: ["conversation"], entity_ids: ["script.cooper_watch"], should_expose: true }).catch(() => {});
     const sw = (await ha.getStates()).find((s) => s.entity_id === PAUSE_SWITCH); // sync initial kill-switch state
@@ -287,7 +320,7 @@ ha.subscribe((entityId, st) => {
       const s = cancelScheduled();
       header(`🛑 stop from phone: "${text}" → cancelled ${n} watch(es), ${s} scheduled sequence(s)`);
       store.logAction(tnow, null, "bridge:stop", text);
-      notifyAll(n || s ? `Stopped ${n} watch${n !== 1 ? "es" : ""} and ${s} scheduled sequence${s !== 1 ? "s" : ""}.` : "Nothing active to stop.");
+      deliverBridgeReply(tnow, n || s ? `Stopped ${n} watch${n !== 1 ? "es" : ""} and ${s} scheduled sequence${s !== 1 ? "s" : ""}.` : "Nothing active to stop.");
       return;
     }
     const isWatch = wantsStandingWhileAway(text) || wantsPresenceStandDown(text) || WATCH_INTENT.test(text);
@@ -296,15 +329,15 @@ ha.subscribe((entityId, st) => {
       goals.push(g);
       header(`📥 watch from phone: "${text}" (#${g.id})${g.expires ? ` [until ${new Date(g.expires).toISOString()}]` : ""}${g.untilPresent ? " [until home]" : ""}${g.whileAway ? " [standing while-away]" : ""}`);
       store.logAction(g.created, g.id, "watch:create", `bridge: ${text}`);
-      if (g.whileAway) { checkPresenceStandDown(tnow).catch(() => {}); notifyAll(`Standing watch set: "${text}". I'll arm whenever everyone's out.`); }
+      if (g.whileAway) { checkPresenceStandDown(tnow).catch(() => {}); deliverBridgeReply(tnow, `Standing watch set: "${text}". I'll arm whenever everyone's out.`); }
       else runGoal(cfg, ha, text, "(initial check — establish what's normal)", budget, hooks)
-        .then((r) => { log(`   ${C.green}→ ${r}${C.reset}`); notifyAll(r); }).catch((e) => log(`   ${C.red}intake error: ${e}${C.reset}`));
+        .then((r) => { log(`   ${C.green}→ ${r}${C.reset}`); deliverBridgeReply(tnow, r); }).catch((e) => { log(`   ${C.red}intake error: ${e}${C.reset}`); deliverBridgeReply(tnow, `Couldn't set that watch up: ${e}`); });
     } else {
       // Any non-watch request → run it now (control / schedule / answer) and report the result back.
       header(`📥 request from phone: "${text}"`);
       store.logAction(tnow, null, "bridge:do", text);
-      runGoal(cfg, ha, text, "(handed over from the voice assistant — handle it now; the summary is reported back to the user)", budget, hooks)
-        .then((r) => { log(`   ${C.green}→ ${r}${C.reset}`); notifyAll(r); }).catch((e) => log(`   ${C.red}bridge error: ${e}${C.reset}`));
+      runGoal(cfg, ha, text, "(handed over from the voice assistant — handle it now; reply in one or two short sentences the assistant can speak aloud)", budget, hooks)
+        .then((r) => { log(`   ${C.green}→ ${r}${C.reset}`); deliverBridgeReply(tnow, r); }).catch((e) => { log(`   ${C.red}bridge error: ${e}${C.reset}`); deliverBridgeReply(tnow, `Sorry — I hit an error: ${e}`); });
     }
     return;
   }

@@ -30,9 +30,12 @@ judgment, sees through your cameras, and knows when to ask first.
   a goal. Watch/expiry/arrival triggers are also inferred from the text.
 - `DELETE /goal/:id` · `DELETE /task/:id` — cancel a watch-goal or a scheduled task.
 
-**Voice bridge:** on first run the add-on self-provisions a bridge — it creates an `input_text`
-helper + an **"Ask Cooper"** script and exposes it to Assist. (Uninstalling leaves them behind —
-delete them manually for a clean removal.)
+**Voice bridge:** on first run the add-on self-provisions a bridge — it creates two `input_text`
+helpers (a request and a response) + an **"Ask Cooper"** script and exposes it to Assist. The script
+hands the request to the guardian, then **waits briefly (~9s) for Cooper's reply** and returns it, so
+the assistant can speak quick answers inline; longer tasks time out with "On it — I'll notify you"
+and Cooper pushes the result. The script is re-written on every start, so updates apply automatically.
+(Uninstalling leaves the helpers/script behind — delete them manually for a clean removal.)
 
 **Required manual step — add this routing instruction to your conversation agent's prompt**
 (Settings → Devices & Services → your Anthropic Conversation agent → Instructions). Without it the
@@ -47,11 +50,15 @@ CRITICAL: you MUST actually CALL the "Ask Cooper" script in this turn. NEVER say
 Cooper", "Cooper will do it", or "you'll get a notification" unless you actually invoked the
 script — if you only describe it, nothing happens. When unsure, call it.
 
+The script returns a "reply" — speak it back to the user verbatim (don't add to it). For quick
+requests that's Cooper's actual answer; for longer tasks it's an acknowledgement and Cooper
+notifies the result when done.
+
 Only handle simple one-shot device control and direct questions yourself.
 ```
 
-Then by voice: *"Cooper, make it look like someone's home"* routes to the guardian, which acts and
-notifies the result.
+Then by voice: *"Cooper, is the garage closed?"* gets a spoken answer back; *"Cooper, make it look
+like someone's home"* is acknowledged and the guardian acts and notifies the result.
 
 ## Config (add-on options; env for standalone dev)
 | Option | Env | Notes |

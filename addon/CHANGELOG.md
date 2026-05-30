@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.0
+- **Cooper now answers out loud, in the same breath.** The voice bridge was fire-and-forget — the
+  assistant only ever said "handing that to Cooper" and the real reply arrived later as a push. The
+  **Ask Cooper** script now sets the request, then **blocks up to ~9s** waiting for Cooper to write its
+  reply to a new `input_text.cooper_response` helper, and returns it so the assistant **speaks Cooper's
+  answer inline**. Quick things ("is the garage closed?", "stop watching", camera checks) come back
+  conversationally; longer agentic tasks time out gracefully with "On it — I'll notify you" and Cooper
+  delivers the result by push as before. No double-talk: a reply spoken inline isn't also pushed.
+- **Self-provisioned, no config edits.** First run creates the `cooper_response` helper, and the script
+  is now **re-written on every start** (idempotent upsert), so existing installs pick up the new
+  wait/reply sequence automatically on update — nothing to paste.
+
 ## 0.19.0
 - **Scheduled sequences are now first-class and persisted.** `schedule_actions` no longer spawns a
   pile of anonymous `setTimeout`s — steps are saved to SQLite (a new `seq_steps` table) and fired by a

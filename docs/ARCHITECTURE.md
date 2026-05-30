@@ -29,7 +29,10 @@ device's default assistant (replacing the stock one).
 
 The guardian (Layer 2) hands off from the phone via a lightweight **bridge** (an exposed "Ask
 Cooper" script → an `input_text` helper it watches), so anything agentic said to the phone routes
-to the guardian, which acts and notifies the result.
+to the guardian. The bridge is **synchronous when it can be**: the script blocks briefly (~9s)
+waiting for Cooper to write its reply to a second `input_text` helper, so the assistant **speaks
+Cooper's answer inline** for quick requests; longer agentic tasks time out gracefully ("On it —
+I'll notify you") and Cooper delivers the result by push when it's done.
 
 ### Layer 2 — Guardian agent service (the novel core)
 A persistent, goal-driven Claude agent (an HA add-on). Goal shapes, one engine:
