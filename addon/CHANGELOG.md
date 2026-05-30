@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.1
+- **Fixes a 1.5.0 regression where authoring could spin and create nothing.** Three causes:
+  - The deterministic validator wrongly rejected a **self-disabling rule's reference to its own
+    entity** (`automation.<id>` doesn't exist *yet* while it's being created) — which started a retry loop.
+  - The semantic check was **blocking** the save and acting like a perfectionist — inventing requirements
+    ("'tonight' should recur nightly"), nitpicking off-by-one counts, never converging. It's now
+    **advisory** (never blocks a save), **conservative** (one blatant mismatch only, simplest reading of
+    your words, no invented requirements), and runs **once per rule** (can't loop).
+  - Live progress reverted to short controlled status lines — 1.5.0 streamed Cooper's raw internal
+    reasoning, which read out as a wall of technical text.
+
 ## 1.5.0
 - **A general semantic check replaces per-case prompt rules.** When an authored rule is mechanically
   valid but doesn't match what you *meant* (a "watch tonight" that stops at 11:59pm), there was no

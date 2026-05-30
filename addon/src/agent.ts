@@ -69,11 +69,8 @@ silent/DND, don't overuse.
 GUARDRAILS & HONESTY: call_service auto-runs reversible, asks for risky, refuses forbidden; authored
 rules whose actions are risky are vetted the same way. "[observe]" = NOT performed (observe mode) — say
 you *would*, never claim you did. "[paused]" = kill-switch on — say so. Report tool results faithfully.
-Always end with a short spoken reply (call finish, or just reply) — never end a turn silently.
-LIVE PROGRESS: on a multi-step task, before each tool call say ONE short, natural, friendly line about
-what you're doing right now ("Sure, let me take a look around." / "Checking the front cameras." / "Okay,
-writing that up.") — it's streamed and SPOKEN to the user as live feedback, so it must sound human and
-conversational, never tool names or internal reasoning. Vary it; don't repeat the same line.`;
+Always end with a short spoken reply (call finish, or just reply) — never end a turn silently. Keep ALL
+text brief and spoken-friendly — a sentence or two, never a wall of detail or internal/technical reasoning.`;
 
 const TOOLS: Anthropic.Tool[] = [
   { name: "get_live_context", description: "Read current live entity states (each tagged with its HA AREA when assigned). Optional domains filter.",
@@ -129,10 +126,13 @@ function resolveCameras(raw: string, known: Set<string>, bad: Set<string> = new 
  *  entity and every service call actually EXISTS (HA saves a rule that names a phantom service/entity
  *  and then fails silently at runtime — this catches it), and lints notify photo attachments. Returns
  *  a list of concrete problems; empty = clean. */
-async function validateConfig(ha: HaClient, config: unknown): Promise<string[]> {
+async function validateConfig(ha: HaClient, config: unknown, selfIds: string[] = []): Promise<string[]> {
   const problems: string[] = [];
   const [states, services] = await Promise.all([ha.getStates(), ha.services()]);
   const ids = new Set(states.map((s) => s.entity_id));
+  // A self-disabling rule references its OWN entity_id (automation.<id> / script.<id>) in an
+  // automation.turn_off action — which doesn't exist YET because we're creating it. Don't flag that.
+  for (const self of selfIds) ids.add(self);
   for (const e of collectEntityIds(config)) if (!ids.has(e)) problems.push(`entity "${e}" does not exist — use a real entity_id (check get_live_context)`);
   for (const s of new Set(collectServices(config))) if (services.size && !services.has(s)) problems.push(`service "${s}" does not exist — use a real one (e.g. a real notify.* target; check NOTIFY TARGETS)`);
   lintNotifyPhotos(config, problems);
@@ -148,15 +148,15 @@ async function semanticVerify(cfg: Config, request: string, config: unknown): Pr
   try {
     const anthropic = new Anthropic({ apiKey: cfg.anthropicKey });
     const res = await anthropic.messages.create({
-      model: cfg.model, max_tokens: 400,
-      system: "You check whether a Home Assistant automation/script FULFILLS the user's request — intent, not style. Does it trigger on what they asked; does the scope/lifecycle match what the words imply (e.g. an overnight watch must keep running past midnight into the small hours, not stop at 23:59; \"today\" is the calendar day; \"3 times\" must actually limit the count); is EVERY action they asked for present; does any alert actually reach them? Reply ONLY compact JSON: {\"ok\":true} if it genuinely matches, else {\"ok\":false,\"issues\":[\"concrete mismatch\",...]}. Flag only real intent mismatches; never nitpick wording or style.",
+      model: cfg.model, max_tokens: 250,
+      system: "You sanity-check an authored Home Assistant rule against what the user EXPLICITLY asked. Take the SIMPLEST reasonable reading of their words. Do NOT invent requirements they didn't state (e.g. do NOT demand that a \"tonight\" rule also recur on future nights, or run past the obvious hours). Flag ONLY a BLATANT, major mismatch: it targets the wrong thing entirely, a clearly-requested action is missing, the alert won't reach them, or the time scope plainly contradicts the words. IGNORE minor/edge logic (off-by-one counts, exact end-hour, mode quirks). When in any doubt, pass. Reply ONLY compact JSON — {\"ok\":true}, or {\"ok\":false,\"issues\":[\"<one clear mismatch>\"]} with AT MOST ONE issue.",
       messages: [{ role: "user", content: `REQUEST: ${request}\n\nRULE:\n${JSON.stringify(config)}` }],
     });
     const txt = res.content.filter((c): c is Anthropic.TextBlock => c.type === "text").map((c) => c.text).join("");
     const m = txt.match(/\{[\s\S]*\}/);
     if (!m) return { ok: true, issues: [] };
     const j = JSON.parse(m[0]) as { ok?: boolean; issues?: unknown };
-    return { ok: j.ok !== false, issues: Array.isArray(j.issues) ? (j.issues as string[]).slice(0, 5) : [] };
+    return { ok: j.ok !== false, issues: Array.isArray(j.issues) ? (j.issues as string[]).slice(0, 1) : [] };
   } catch { return { ok: true, issues: [] }; }
 }
 
@@ -245,6 +245,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
 
   header(`▶ GOAL  ${C.reset}${C.bold}${goal}${C.reset}  ${C.gray}(observe=${cfg.observeMode}, model=${cfg.model})`);
   const narrated = new Set<string>(); // streamed status lines already said this turn — don't repeat them
+  const semChecked = new Set<string>(); // rule ids already semantic-checked this turn — don't re-nitpick (anti-loop)
   for (let step = 0; step < 12; step++) {
     rollCache(messages);
     const res = await anthropic.messages.create({
@@ -260,14 +261,10 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     const toolUses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === "tool_use");
     const u = res.usage as Anthropic.Usage & { cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
     L(`  ${C.gray}step ${step}: ${toolUses.length} tool call(s) [stop_reason=${res.stop_reason}] tok in=${u.input_tokens} out=${u.output_tokens} cache(w=${u.cache_creation_input_tokens ?? 0} r=${u.cache_read_input_tokens ?? 0})${C.reset}`);
-    // Stream running feedback during a long turn (so it's not silence, and the voice pipeline has
-    // something to speak). Prefer COOPER'S OWN words for this step — natural and varied — and fall back
-    // to a generic status only if it narrated nothing. Dedupe so the same line isn't repeated.
-    if (onProgress && !finishing) {
-      const own = textOf(res.content).replace(/\s+/g, " ").trim();
-      const line = own || stepNarration(toolUses);
-      if (line && !narrated.has(line)) { narrated.add(line); onProgress(line.slice(0, 200)); }
-    }
+    // Stream a SHORT, controlled status per step so the user gets running feedback (and the voice
+    // pipeline has something to speak) — NOT Cooper's raw interim text, which is verbose internal
+    // reasoning. Dedupe so the same line isn't repeated.
+    if (onProgress && !finishing) { const n = stepNarration(toolUses); if (n && !narrated.has(n)) { narrated.add(n); onProgress(n); } }
     // No client tool calls → Claude has answered directly (text). Return that.
     if (toolUses.length === 0) return textOf(res.content) || lastConfirmation || "Okay — done.";
 
@@ -295,15 +292,23 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         else {
           // Deterministic gate: refuse to write a rule that names a phantom entity/service (caught here,
           // not silently at 3am when it fails to fire). The agent fixes and re-authors.
-          // Two gates: deterministic (entities/services real — can't be faked) then a lean SEMANTIC
-          // check (does it actually match the request — the general catch for intent-mismatches, so we
-          // don't hand-code per-case rules in the prompt). Both must pass before it's saved.
-          const problems = await validateConfig(ha, cfg2);
-          const sem = problems.length ? { ok: true, issues: [] as string[] } : await semanticVerify(cfg, goal, cfg2);
+          // Deterministic gate (HARD — phantom entities/services can't be faked; self-reference allowed).
+          const problems = await validateConfig(ha, cfg2, [`automation.${id}`]);
           if (problems.length) out = `NOT CREATED — real, checked problems; fix them and call create_automation again with the SAME id:\n- ${problems.join("\n- ")}`;
-          else if (!sem.ok && sem.issues.length) out = `NOT CREATED — the rule is valid but doesn't fully match the request:\n- ${sem.issues.join("\n- ")}\nFix and call create_automation again with the SAME id.`;
           else {
-            try { await ha.upsertAutomation(id, cfg2); out = `created automation ${id} ("${cfg2.alias}") — live; entities + services validated and it matches the request. Confirm to the user and finish.`; lastConfirmation = `Set it up — automation "${cfg2.alias}" is live.`; }
+            try {
+              await ha.upsertAutomation(id, cfg2); // SAVE first — entities/services are real
+              lastConfirmation = `Set it up — automation "${cfg2.alias}" is live.`;
+              // Semantic check is ADVISORY and runs ONCE per rule (never blocks, never loops): surface at
+              // most one blatant mismatch as a note the agent MAY act on, then move on.
+              let note = "";
+              if (!semChecked.has(id)) {
+                semChecked.add(id);
+                const sem = await semanticVerify(cfg, goal, cfg2);
+                if (!sem.ok && sem.issues[0]) note = ` One thing to double-check: ${sem.issues[0]} — if that's off, call create_automation again with the SAME id to fix it; otherwise just confirm and finish.`;
+              }
+              out = `created automation ${id} ("${cfg2.alias}") — live.${note || " Confirm to the user and finish."}`;
+            }
             catch (e) { out = `ERROR creating automation: ${String(e).slice(0, 200)}`; }
           }
         }
@@ -333,12 +338,20 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         if (vet.never.length) out = `REFUSED: this script would perform forbidden action(s): ${vet.never.join(", ")}. Not creating it.`;
         else if (vet.confirm.length) out = `REFUSED: this script would perform risky action(s) (${vet.confirm.join(", ")}) unattended. Scripts are for reversible timed sequences (lights/switches/media/pump/watering) — for a risky action, ask the user to confirm it directly instead of scripting it.`;
         else {
-          const problems = await validateConfig(ha, sc);
-          const sem = problems.length ? { ok: true, issues: [] as string[] } : await semanticVerify(cfg, goal, sc);
+          const problems = await validateConfig(ha, sc, [`script.${id}`]);
           if (problems.length) out = `NOT CREATED — fix these real problems and call create_script again with the SAME id:\n- ${problems.join("\n- ")}`;
-          else if (!sem.ok && sem.issues.length) out = `NOT CREATED — the sequence is valid but doesn't fully match the request:\n- ${sem.issues.join("\n- ")}\nFix and call create_script again with the SAME id.`;
           else {
-            try { await ha.upsertScript(id, sc); out = `created script ${id} ("${sc.alias}") — run with script.turn_on entity_id script.${id}; validated and matches the request. Confirm to the user and finish.`; lastConfirmation = `Set it up — script "${sc.alias}" is ready.`; }
+            try {
+              await ha.upsertScript(id, sc);
+              lastConfirmation = `Set it up — script "${sc.alias}" is ready.`;
+              let note = "";
+              if (!semChecked.has(id)) {
+                semChecked.add(id);
+                const sem = await semanticVerify(cfg, goal, sc);
+                if (!sem.ok && sem.issues[0]) note = ` One thing to double-check: ${sem.issues[0]} — fix with create_script (same id) if off, else just confirm.`;
+              }
+              out = `created script ${id} ("${sc.alias}") — run with script.turn_on entity_id script.${id}.${note || " Confirm to the user and finish."}`;
+            }
             catch (e) { out = `ERROR creating script: ${String(e).slice(0, 200)}`; }
           }
         }
