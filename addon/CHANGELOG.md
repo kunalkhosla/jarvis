@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.2
+- **The (advisory) semantic check now catches lifecycle/scope mistakes.** The recurring weak spot is
+  time-scoping — a "for 2 hours" watch that never actually stops, or a "tonight" rule whose same-day date
+  condition makes it die at midnight. Since the check is advisory and can't loop (1.5.1), it now scrutinizes
+  exactly this — does the rule actually expire/stop when the request implies — and nudges Cooper to fix it,
+  instead of hand-coding per-case time rules in the prompt.
+
 ## 1.6.1
 - **Fixes the doubled answer when streaming.** Cooper often writes its answer as text *and* calls
   `finish` with a summary of the same thing — with streaming, both got spoken (the reply appeared twice).

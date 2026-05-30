@@ -2,7 +2,7 @@
 # The supervisor injects SUPERVISOR_TOKEN and writes the options below to /data/options.json.
 # The same image also runs as a plain Docker container (use HA_URL + HA_TOKEN env instead).
 name: Cooper Guardian
-version: "1.6.1"
+version: "1.6.2"
 slug: cooper_guardian
 description: "Claude home agent that routes each request — answers, acts, or authors native HA automations."
 url: https://github.com/kunalkhosla/cooper
