@@ -88,6 +88,37 @@ When you trust it, set **`observe_mode: false`** in the add-on config so it actu
 
 ---
 
+## Get the most out of Cooper
+
+Cooper is only as sharp as what it can *see and understand* about your home. A few minutes of
+housekeeping makes a real difference in how well it picks the right entities:
+
+1. **Assign your entities to Areas — the big one.** Cooper grounds itself in your Home Assistant
+   **areas**: *"watch the backyard"* expands to *every* entity in the Backyard area (cameras, lights,
+   sensors). Entities with no area fall back to fuzzy name-matching, which is worse — it can grab the
+   wrong sensor. Assign **devices** to areas (Settings → Devices → a device → Area) — that cascades to
+   all of the device's entities. Pay special attention to your **outdoor cameras and their
+   person/motion sensors**; those drive the security use-cases.
+2. **Label cross-area groups.** An area is one room/zone; **Labels** group things that span areas — e.g.
+   label all your outdoor cameras `outdoor-camera`, so *"check all the outside cameras"* resolves cleanly.
+3. **Clean up dead / unavailable entities.** Stale entities (persistently `unavailable`/`unknown`) and
+   dead integrations are noise the agent can trip over. Remove or fix them (Settings → Devices &
+   Services → Entities, filter by status) so Cooper only sees real, live, controllable devices.
+4. **Use clear friendly names.** Cooper reads friendly names, not entity IDs — and entity IDs often
+   *lie* (a zone slugged `zone_5_front` can actually be your side yard). Name things the way you'd say
+   them out loud.
+5. **Install the companion app on your phones.** It gives Cooper a `notify.mobile_app_*` to alert you, a
+   camera photo to attach — and because the app tells Cooper *which* device is talking, *"ping me"* hits
+   the phone you're actually on. Make sure notifications are allowed.
+6. **Start in observe mode, then let it act.** Keep `observe_mode: true` until you trust its judgment
+   (it describes what it *would* do without doing it), then flip to `false`. Keep the kill-switch
+   (`input_boolean.cooper_pause`) handy.
+7. **Want snappy spoken replies? Use a streaming TTS.** Some cloud TTS engines buffer the whole reply
+   before speaking. A local **Piper** add-on (or ElevenLabs) speaks as Cooper streams.
+8. **Check its work — it's all visible.** Everything Cooper writes is a normal HA automation/script
+   tagged `[Cooper]` in your Automations list. Glance at them, edit them, or just tell Cooper *"that's
+   not right, fix it."*
+
 ## Safety model (worth knowing)
 
 - **Observe mode** — start here; Cooper takes no real actions, only describes them.

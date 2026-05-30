@@ -139,6 +139,11 @@ Two parts — the **add-on** (the brain) and the **integration** (the voice):
 > **👉 Full step-by-step instructions — prerequisites, configuration, first use, troubleshooting — are in
 > [docs/SETUP.md](docs/SETUP.md).** Start there.
 
+**Get the most out of it:** Cooper grounds itself in your Home Assistant **areas** — so a few minutes of
+tidy-up pays off. Assign your entities to areas (especially the **outdoor cameras + their sensors**),
+clear out dead/unavailable entities, and use names you'd actually say out loud. The full checklist is in
+[docs/SETUP.md → *Get the most out of Cooper*](docs/SETUP.md#get-the-most-out-of-cooper).
+
 It also runs as a plain Docker container for local development (`HA_URL` + `HA_TOKEN` instead of the
 supervisor token).
 
@@ -150,7 +155,7 @@ supervisor token).
 | [USE-CASES.md](docs/USE-CASES.md) | The full catalog of what it can do |
 | [MIGRATING-FROM-AUTOMATIONS.md](docs/MIGRATING-FROM-AUTOMATIONS.md) | What to keep as automations, what to let Cooper author, and the hybrid pattern |
 | [GUARDRAILS.md](docs/GUARDRAILS.md) | Autonomy model — act on safe / confirm risky / never |
-| [PLAN.md](docs/PLAN.md) | Phased build roadmap |
+| [PLAN.md](docs/PLAN.md) | Where Cooper is today + what's next, and the registry-hygiene prerequisite |
 
 ## Design notes
 
