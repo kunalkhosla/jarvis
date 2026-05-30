@@ -263,6 +263,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     // No sink (autonomous/judge calls) → plain create. finalMessage() yields the same Message for tools.
     let res: Anthropic.Message;
     if (onProgress) {
+      if (step > 0) onProgress(" "); // separate this step's words from the previous step's (no run-on)
       const s = anthropic.messages.stream(params as Anthropic.MessageStreamParams);
       s.on("text", (delta) => onProgress(delta));
       res = await s.finalMessage();
@@ -288,7 +289,14 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     for (const t of toolUses) {
       const a = t.input as any;
       let out = "";
-      if (t.name === "finish") { L(`${C.green}${C.bold}✔ finish:${C.reset}${C.green} ${a.summary}${C.reset}`); if (onProgress) onProgress(` ${a.summary}`); return a.summary; }
+      if (t.name === "finish") {
+        L(`${C.green}${C.bold}✔ finish:${C.reset}${C.green} ${a.summary}${C.reset}`);
+        // If Cooper already wrote its answer as text (streamed), the finish summary is a DUPLICATE — don't
+        // re-speak it; keep the text as the answer. Only voice the summary when there was no text answer.
+        const streamed = textOf(res.content);
+        if (onProgress && !streamed) onProgress(` ${a.summary}`);
+        return streamed || a.summary;
+      }
       else if (t.name === "create_automation") {
         // Enforce a clear Cooper convention regardless of what the model passed: id prefix `cooper_`,
         // alias prefix `[Cooper] `, and a description recording the request — so it's unmistakable in

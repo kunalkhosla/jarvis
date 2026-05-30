@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.1
+- **Fixes the doubled answer when streaming.** Cooper often writes its answer as text *and* calls
+  `finish` with a summary of the same thing — with streaming, both got spoken (the reply appeared twice).
+  Now the finish summary is only voiced when there was no text answer. Also adds the missing space between
+  steps (no more "for you.Everything").
+
 ## 1.6.0
 - **Token-streaming — Cooper's words are spoken as it types them.** Instead of waiting ~3-4s for a whole
   step before any feedback, the model's response now streams token-by-token, so the first words land in
