@@ -2,59 +2,80 @@
 
 ## Design principle
 
-Beat off-the-shelf voice assistants on **both** axes:
-- **Speed** — common commands ("turn off the kitchen lights") resolve via HA's local intent
-  engine in ~milliseconds, no LLM round-trip.
-- **Intelligence** — anything conversational, ambiguous, or multi-step falls through to Claude,
-  which reasons and can fire several coordinated actions.
+Cooper is a **routing agent over Home Assistant** — not an automation engine. It doesn't poll, hold
+a watch loop, or keep its own state machine running in the background. Each thing you say is a single
+turn: Cooper *routes* it to the cheapest surface that does the job, and HA does the durable work.
 
-A naive "send everything to an LLM" design would be *slower* than a local assistant. The hybrid
-fast-path + smart-path is the whole trick.
+Three jobs, one brain:
+- **Router** — answer questions, fire reversible actions, gate risky ones behind a Yes/No.
+- **Compiler** — anything durable, ongoing, scheduled, or recurring gets **authored as a native HA
+  automation or script** that HA runs itself. Cheap native triggers, survive restarts, visible and
+  editable in your Automations UI.
+- **Judgment oracle** — when a rule needs a *smart* step ("is that actually a person at the door?"),
+  the authored rule calls back into Cooper for that one decision, then HA carries on.
 
-## Three layers
+The payoff: **idle costs nothing.** There is no heartbeat and no Cooper-held state. HA's own triggers
+wake Cooper only on real events, never on a loop.
 
-### Layer 1 — Voice/chat front-end (Cooper *is* the conversation agent)
-HA's **Assist** pipeline (wake word → STT → conversation agent → TTS), with the conversation agent
-set to **Cooper** — a small custom integration (`custom_components/cooper/`) that registers the
-guardian directly as a Home Assistant conversation agent. Every utterance goes straight to Cooper
-over HTTP (`POST /ask` on the add-on); Cooper reasons, acts, and replies, and the assistant **speaks
-that reply inline**. One brain, a direct request/response — no second LLM, no script, no `input_text`
-mailbox. Conversation **memory** (follow-ups like "turn it off") and **in-chat confirmations**
-("Unlock the front door — yes or no?" → "yes") are native to this path. Cooper answers everything via
-its Layer-2 toolset: home control, status, local weather (`get_forecast`), camera vision, and live
-web facts (native `web_search`).
+## Two parts
 
-> This replaced an earlier two-layer bridge — a stock LLM conversation agent that forwarded agentic
-> requests to the guardian through an "Ask Cooper" script + `input_text` mailbox. A live stress test
-> showed the mailbox caused cross-request answer bleed, 255-char truncation, and faithfulness drift;
-> the direct integration removes all three structurally.
+### Part 1 — The integration (Cooper *is* the conversation agent)
+
+`custom_components/cooper/` registers Cooper directly as a Home Assistant **Assist** conversation
+agent (wake word → STT → conversation agent → TTS). On every turn it forwards
+`{ text, device_id, user_id, conversation history }` to the add-on via `POST /ask`, and **streams
+Cooper's reply token-by-token** into HA's chat log — so the voice pipeline can start speaking within
+~1s instead of waiting for the whole answer.
+
+Two things live in this layer because they're conversational, not agentic:
+- **Conversation memory** — follow-ups like "now turn it off" resolve against history.
+- **In-chat Yes/No confirmations** — "Unlock the front door — yes or no?" → "yes", inline in the
+  same chat turn.
+
+Forwarding `device_id` / `user_id` gives the add-on **caller context**: when you say "ping me,"
+Cooper targets *your* phone, not a hardcoded device.
+
+> This replaced an earlier bridge — a stock LLM conversation agent forwarding requests to the
+> guardian through an "Ask Cooper" script + `input_text` mailbox. A live stress test showed the
+> mailbox caused cross-request answer bleed, 255-char truncation, and faithfulness drift; the direct
+> streaming integration removes all three structurally.
 
 **Optional local fast-path:** enable HA's *"prefer handling commands locally"* and expose your core
 entities to Assist — HA then resolves simple commands ("turn off the kitchen lights") with its local
-intent engine in milliseconds and only falls through to Cooper for anything conversational, ambiguous,
-or multi-step. Without it, every utterance is a Cooper eval (a few seconds) — simpler setup, no local
-speed path. Voice satellites (HA Voice PE / ESPHome, "Cooper" wake word) are an optional add; text/app
-works day one. On Android, HA Assist can be the device's default assistant.
+intent engine in milliseconds, falling through to Cooper only for anything conversational, ambiguous,
+or multi-step. Without it, every utterance is a Cooper eval (a few seconds). Voice satellites
+(HA Voice PE / ESPHome, "Cooper" wake word) are an optional add; text/app works day one. On Android,
+HA Assist can be the device's default assistant.
 
-### Layer 2 — Guardian agent service (the novel core)
-A persistent, goal-driven Claude agent (an HA add-on). Goal shapes, one engine:
-- **Watch-goals** ("keep an eye", "look after the house") — long-running; wakes on HA WebSocket
-  state-changes (instant, incl. camera person/motion sensors) + a periodic heartbeat; acts/alerts
-  **only when warranted**. Time-boxable ("until Monday"), presence-aware (stand down when everyone's
-  home), and can be **standing** (auto-arm whenever everyone leaves).
-- **Do-goals** ("clean the pool", "make it cozy") — one-shot: interpret → act → **verify** → report.
-- **Tasks** (deferred do-goals) — fire on a scheduled time or on arrival home ("prepare the house").
+### Part 2 — The add-on ("Cooper Guardian", the brain)
 
-Tools the agent wields: `get_live_context`, **`look_at_camera`** (vision — pulls a live snapshot and
-*sees* the scene), `call_service` (guardrailed, anti-hallucination-checked), **`get_forecast`** (HA's
-local forecast), **`schedule_actions`** (plans + runs its own timed sequence — e.g. presence
-simulation), native `web_search`, and `notify` (with a camera photo + an agent-chosen urgency:
-normal / high / critical). A **cost guard** caps automatic LLM calls per hour/day; everything is
-event-driven (one snapshot per trigger, never a live video feed), so idle costs nothing.
+An **isolated HA add-on container** (also runs standalone via `HA_URL` + `HA_TOKEN`). TypeScript +
+`@anthropic-ai/sdk`, a tool-use loop (`runGoal` in `agent.ts`) with **prompt caching**, **token
+streaming**, and **budget/cost tracking**. It reaches HA over **REST + WebSocket only** — no shell,
+no config-file access.
 
-### Layer 3 — Proactive layer
-Scheduled/event-driven intelligence the agent initiates: morning briefing, anomaly heads-up,
-freeze/leak/energy guardians, "leave-soon" nudges. Emerges from the Layer 2 engine.
+Every utterance arrives as `POST /ask`, and Cooper **routes** it:
+
+- **A question** → read tools, then answer:
+  - `get_live_context` — current state, each entity tagged with its **area** + `device_class`
+  - `get_home_map` — areas → entities
+  - `get_history` — what changed and when
+  - `look_at_camera` — pulls a live snapshot and *sees* the scene (vision)
+  - `get_forecast` — HA's local weather
+  - `web_search` — live web facts
+- **A reversible action** → `call_service` directly (guardrailed, anti-hallucination-checked).
+- **A risky action** → Yes/No confirm (in-chat or push), act only on "yes".
+- **Anything durable / ongoing / scheduled / recurring** → Cooper **authors a native HA rule**:
+  - `create_automation` / `create_script` — HA owns the trigger and the schedule
+  - the *smart* step inside a rule (e.g. "judge whether that's a person") is an action calling
+    `conversation.process` back to `conversation.cooper` — so the rule stays cheap until the moment
+    judgment is actually needed
+  - "do this N times" uses a real HA **counter helper** (`create_counter`), not a Cooper flag
+  - lifecycle ("until Monday", "while we're away") is expressed as **native HA conditions**, never
+    Cooper-held state
+
+So the model is: **Cooper = router + compiler + judgment oracle; HA = the durable execution
+substrate.** No polling, no heartbeat, nothing for Cooper to keep alive.
 
 ## System diagram
 
@@ -64,62 +85,71 @@ flowchart LR
       direction TB
       ASSIST["Assist: STT/TTS"]
       INTENT["Local intents ⚡ (optional)"]
-      CONV["Cooper conversation agent<br/>(custom integration)"]
-      WS[("WebSocket: state events")]
+      CONV["Cooper conversation integration<br/>(memory · in-chat Yes/No · caller context)"]
+      WS[("WebSocket")]
       REST[("REST API")]
       DEV["Devices & sensors<br/>(incl. cameras)"]
+      AUTOS["Native automations & scripts<br/>(authored by Cooper)"]
       ASSIST --> INTENT --> CONV
       WS --- DEV
       REST --- DEV
+      AUTOS -. "trigger fires" .-> DEV
     end
 
     subgraph SVC["Cooper Guardian (HA add-on)"]
       direction TB
-      TRIG["Triggers: WS events + heartbeat + tasks"]
-      LOOP["Goal loop: reason · see · act · verify"]
-      GUARD["Guardrails + cost guard"]
-      MEM[("SQLite: goals · tasks · log")]
-      TRIG --> LOOP --> GUARD
-      LOOP <--> MEM
+      LOOP["Routing loop (runGoal)<br/>answer · act · confirm · author"]
+      GUARD["Guardrails + validator + budget"]
+      LOG[("SQLite: append-only audit log")]
+      LOOP --> GUARD
+      LOOP --> LOG
     end
 
-    CLAUDE[["Anthropic API · Haiku→Sonnet/Opus"]]
-    PHONE["📲 notify (+photo) / 🔊 TTS"]
+    CLAUDE[["Anthropic API · prompt caching · streaming"]]
+    PHONE["📲 notify (+photo) / 🔊 streamed TTS"]
 
-    CONV -->|"POST /ask (every turn)"| LOOP
+    CONV -->|"POST /ask {text, device_id, user_id, history}"| LOOP
+    LOOP -->|reply tokens| CONV
     LOOP -->|reason + vision| CLAUDE
-    WS --> TRIG
-    LOOP <-->|state · camera snapshots| REST
-    GUARD --> REST
+    LOOP <-->|read state · camera snapshots| REST
+    GUARD -->|call_service| REST
+    LOOP -->|"write rules (create_automation/script)"| REST
+    AUTOS -->|"conversation.process → cooper"| CONV
     LOOP --> PHONE
 ```
 
-## The goal loop
+## Routing & authoring flow
 
 ```mermaid
 sequenceDiagram
-    participant E as HA event / heartbeat
-    participant A as Agent loop
+    participant U as User
+    participant C as Cooper (/ask)
     participant Cl as Claude
     participant H as HA (REST/WS)
-    participant U as User (phone)
 
-    E->>A: state change (motion/door/person) or tick
-    A->>H: read live state (+ camera snapshot if useful)
-    A->>Cl: goal + state + history → "what now?"
-    Cl-->>A: action(s) | alert | no-op
-    alt safe / reversible
-        A->>H: invoke (lights, fan, pool…)
-        A->>H: verify result
-    else risky / irreversible
-        A->>U: confirm? (lock, alarm, valve, garage)
-        U-->>A: yes / no
-        A->>H: invoke only if confirmed
+    U->>C: utterance
+    C->>Cl: route: question / action / durable?
+    alt question
+        C->>H: read state · history · camera · forecast
+        C-->>U: streamed answer
+    else reversible action
+        C->>H: call_service
+        C-->>U: done (streamed)
+    else risky action
+        C-->>U: confirm? (in-chat or push)
+        U-->>C: yes / no
+        C->>H: call_service (only if yes)
+    else durable / scheduled / recurring
+        C->>H: create_automation / create_script / create_counter
+        Note over C,H: validator checks every entity & service exists before save
+        C-->>U: "I set up a rule that does it" (in your Automations UI)
     end
-    opt warranted
-        A->>U: contextual alert
-    end
-    A->>A: persist state + update baseline
+
+    Note over H,C: later — the authored rule runs itself
+    H->>H: native trigger fires (motion / time / presence)
+    H->>C: conversation.process → cooper ("look at the camera")
+    C->>H: look_at_camera + judge
+    C->>U: notify (with photo) only if warranted
 ```
 
 ## Deployment — a Home Assistant add-on
@@ -138,29 +168,50 @@ flowchart TB
     ADDON --> ANTH["Anthropic API"]
 ```
 
-Why an isolated add-on rather than a custom integration that runs *inside* HA: a long-running LLM
-agent with a bug or memory leak should never be able to take the whole smart home down with it. An
-add-on container is firewalled from HA core — its blast radius is itself.
+Why an isolated add-on rather than an integration that runs *inside* HA: an LLM agent with a bug
+should never be able to take the whole smart home down with it. An add-on container is firewalled
+from HA core — its blast radius is itself.
 
 The same image also runs as a plain **standalone Docker container** for local development (point it
 at HA with `HA_URL` + `HA_TOKEN` instead of the supervisor token) — handy for iterating without a
 build/install cycle on the HA box.
 
+## Control surface
+
+The add-on exposes exactly two endpoints — nothing else:
+
+- **`GET /healthz`** — status (`ok` / `observe` / `paused` / `budget`).
+- **`POST /ask`** — `{ text, session_id, history?, device_id?, user_id?, stream? }` → `{ reply }`.
+  With `stream: true`, the reply is an **NDJSON token stream** (what feeds inline TTS).
+
+There is no `POST /goal`, no task/sequence/goal lifecycle API — Cooper doesn't own durable jobs, HA
+does.
+
 ## Tech stack
 
-- **Language/SDK:** TypeScript + `@anthropic-ai/sdk` — a tool-use loop (`addon/src/`).
-- **Model tiering:** Haiku for cheap routine checks; Sonnet for sharper judgment & multi-step
-  planning (configurable). Event-driven (one call per real trigger) + cost caps → low cost.
-- **HA access:** REST + WebSocket only — live state, the state-change subscription, service calls,
-  camera snapshots (`camera_proxy`), the weather forecast service, and `notify`. No MCP, no shell.
-- **State:** SQLite (`/data`) — goals, tasks, action log.
-- **Deploy:** a Home Assistant **add-on** (`config.yaml` + `Dockerfile`); `GET /healthz` +
-  `POST /goal` control surface. The same image runs as a standalone container for local dev.
+- **Language/SDK:** TypeScript + `@anthropic-ai/sdk` — a tool-use loop (`runGoal` in
+  `addon/src/agent.ts`) with prompt caching, token streaming, and per-window budget/cost tracking.
+- **HA access:** REST + WebSocket only — live state, service calls, camera snapshots
+  (`camera_proxy`), the weather forecast service, writing native automations/scripts, and `notify`.
+  No MCP, no shell, no config-file access.
+- **State:** SQLite (`/data`) is an **append-only audit log only** — every evaluation and action,
+  surfaced via `/healthz`. Cooper holds no durable goal/task state; HA's automations are the state.
+- **Deploy:** a Home Assistant **add-on** (`config.yaml` + `Dockerfile`). The same image runs as a
+  standalone container for local dev.
 - **Secrets:** a dedicated project Anthropic key (add-on option / env); never committed.
 
-## Tool-use safety order
+## Tool-use safety — the least-powerful surface
 
-The guardian reaches HA only through its **REST + WebSocket** API — the least-powerful surface that
-does the job, with **no shell and no config-file access** (so a bug can't rewrite your HA config).
-Its tiered guardrails ([GUARDRAILS.md](GUARDRAILS.md)) encode the same least-privilege, human-in-
-the-loop-on-irreversible posture for the actions themselves.
+Cooper reaches HA only through its **REST + WebSocket** API — the least-powerful surface that does
+the job, with **no shell and no config-file access**, so a bug can't rewrite your HA config.
+
+Its tiered guardrails ([GUARDRAILS.md](GUARDRAILS.md)) — *act on safe/reversible, confirm risky,
+never do the forbidden* — apply in **two places**:
+
+1. To **direct actions** at the moment Cooper calls a service.
+2. To the **actions inside an authored rule**, vetted at authoring time — so a native automation
+   Cooper writes can never embed an action Cooper wouldn't have been allowed to take by hand.
+
+And a **deterministic validator** checks that every entity and service referenced by an authored
+rule actually exists *before the rule is saved* — Cooper can't compile a rule that points at an
+invented device. Same posture, whether Cooper acts now or writes something HA will run later.

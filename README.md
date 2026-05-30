@@ -9,64 +9,62 @@
 
 
 
-> **You:** *"I'm leaving for an hour — keep an eye on the cameras."*
-> **Cooper:** *"On it. I'll watch the perimeter and flag anything that moves. Have a good hour."*
+> **You:** *"I'm leaving for an hour — keep an eye on the cameras and ping me if anyone shows up."*
+> **Cooper:** *"On it. I've set up a rule that'll watch the driveway and check the camera if motion trips — I'll text you if it's a person. Have a good hour."*
 
-Not "if motion after sunset, then porch light." Cooper **reasons over your live home**, **sees through your cameras** (real vision, not motion pings), **acts** on the safe stuff, **asks** before the risky stuff, and **remembers** what it's watching across restarts. Deadpan personality optional.
+Not "if motion after sunset, then porch light." Cooper **reasons over your live home**, **sees through your cameras** (real vision, not motion pings), **acts** on the safe stuff, **asks** before the risky stuff, and — for anything ongoing — **writes a real Home Assistant automation you can see and edit**. Deadpan personality optional.
 
 ## What it can do
 
-🎙️ **Talk to your whole home.** Ask anything, phrased any way. Common commands resolve locally in
-milliseconds; anything conversational, ambiguous, or multi-step falls back to Claude — with live
-**web search** built in (*"will it rain on my drive home?"*).
+🎙️ **Talk to your whole home.** Ask anything, phrased any way — *"is the garage closed?"*, *"warm up the living room,"* *"will it rain on my drive home?"*. Cooper grounds itself in your HA **areas** and **device classes**, so *"the backyard"* resolves to every entity actually out there — not a guessed name — and live **web search** is built in for the world beyond your walls.
 
-👁️ **Actually sees your cameras.** When a person/motion sensor trips, Cooper pulls a live snapshot
-and *looks*:
+👁️ **Actually sees your cameras.** When a rule wakes it to look, Cooper pulls a live snapshot and *looks*:
 
 > 📲 *"Someone's on the driveway — looks like a delivery driver, just dropped a box by the garage
 > and left."*
 
 Not "motion detected at 2:47pm" — a description of **what's actually happening**.
 
-🛡️ **Watches with judgment, not rules.** *"Keep an eye out"* learns what's normal and only pings
-you when something genuinely warrants it — a door opening when no one's home, the garage left open
-at night, a person in the yard after dark.
+🛡️ **Writes rules with judgment baked in.** *"Alert me when someone's at the gate after dark"* becomes a **native HA automation** Cooper authors for you — cheap local triggers do the watching, and when one fires, the rule calls *back* to Cooper to **look at the camera and decide** whether it's worth a ping. Judgment where it matters, no polling where it doesn't.
 
-🏖️ **Goes away with you — and house-sits.** *"We're out until Monday evening — keep an eye on the
-place and make it look like someone's home."* Cooper runs a time-boxed watch **and simulates
-presence intelligently**: lights, TV and blinds follow your *actual* routines and the sunset,
-varied night to night so it never loops like a robotic timer, winding down at a believable bedtime.
-If a camera catches someone lingering at the gate, it escalates to a **critical** alert with the
-photo. And it **stands down the moment you're all home again** — not on a guessed clock — with a
-time cap as a backstop.
+🏖️ **Goes away with you — and house-sits.** *"We're out until Monday — keep an eye on the place and make it look like someone's home."* Cooper **writes a presence-simulation script** — lights, TV and blinds varied night to night so it never loops like a robotic timer — plus a watch rule that escalates to a **critical** alert with a photo if a camera catches someone lingering. The rules live in HA, run themselves, and **clean up when the trip's over**.
 
-🤖 **Acts safely.** Reversible things (lights, climate, media, fans) just happen. Risky things
-(locks, alarm, garage, water valve) **always ask first**. Forbidden things **never** happen. Ships
-in observe-only mode with a kill switch.
+🤖 **Acts safely.** Reversible things (lights, climate, media, fans, scenes) just happen, then it confirms. Risky things (locks, alarm, garage, water valve, siren) **always ask first** — a real yes/no, in-chat while you're talking or a push notification otherwise. Forbidden things **never** happen. The same guardrails vet the actions *inside* any rule Cooper writes. Ships in observe-only mode with a kill switch.
 
-🧠 **Remembers & is cheap to run.** Watch-goals persist across restarts (SQLite). Camera-watching is
-*event-driven* — one snapshot per trigger, never a live video feed to the cloud — with hard
-hourly/daily spend caps and live token accounting. **Idle costs nothing.**
+🧠 **Cheap to run, and yours to keep.** The rules Cooper writes are **plain Home Assistant** — they survive restarts, show up in your Automations/Scripts UI, and run on native triggers with **no Cooper polling**. Idle costs nothing; Cooper only thinks when a rule actually wakes it. Replies stream token-by-token, and *"ping me"* targets the phone you're talking from.
 
 See [docs/USE-CASES.md](docs/USE-CASES.md) for the full catalog.
 
 ## Why not just automations?
 
 Automations are rules you write in advance — *IF this AND this THEN that*. You can't enumerate
-every situation; there's always one more `IF`. Cooper reasons in the moment instead:
+every situation, and you shouldn't have to hand-write YAML for each one. So Cooper **writes the
+automation for you** — from a sentence — and adds judgment where a static rule falls short:
 
-- An automation fires the same for a raccoon, a delivery, and a stranger. Cooper **looks** and
-  tells you which.
+- A plain automation fires the same for a raccoon, a delivery, and a stranger. Cooper's rule
+  **calls back to look** and tells you which.
 - New behavior is a sentence (*"watch the backyard tonight"*), not a blueprint — anyone can direct it.
-- Rename a device and a rule breaks silently. Cooper works off what's actually there.
+- Rename a device and a hand-written rule breaks silently. Cooper works off your areas and what's
+  actually there.
 - *"Is everything okay at home?"* is one question, not a web of rules.
 
-It doesn't replace automations — fast local rules handle the reflexes (porch light at sunset);
-Cooper is the **judgment layer** on top.
+It doesn't replace automations — it **authors** them. Fast local triggers still handle the reflexes
+(porch light at sunset); Cooper is the **judgment layer** that writes them and gets woken when a
+decision is needed.
 
-> Automations are a vending machine. Cooper is a concierge.
+> Automations are a vending machine. Cooper is a concierge — who happens to write the automations.
 
 ## Architecture at a glance
+
+Cooper is a **router** over Home Assistant. For every request it picks the right shape of response:
+
+| Request | Cooper does |
+|---|---|
+| **Inform** — *"is the back door locked?"*, *"did anyone come by today?"* | Reads live context / history / camera vision / forecast / web, answers |
+| **Act now, reversible** — lights, fans, media, climate, scenes | Calls the service, confirms |
+| **Act now, risky** — locks, alarm, valve, garage, siren | Asks **yes/no** first, acts only on *yes* |
+| **Durable / ongoing / scheduled** — *"alert me when…"*, *"every evening…"*, *"run the pump 10 min"*, house-sitting | **Writes a native HA automation or script**; HA runs it |
+| **Manage** — *"what are you watching?"*, *"stop that"* | Lists / edits / deletes its own `[Cooper]` rules |
 
 ```mermaid
 flowchart TB
@@ -77,54 +75,54 @@ flowchart TB
 
     subgraph ha["Home Assistant (HAOS)"]
       ASSIST["Assist pipeline<br/>(STT · TTS)"]
-      INTENT["Local intent engine<br/>⚡ fast path (~ms)"]
-      CONV["Anthropic Conversation agent<br/>🧠 Claude fallback"]
-      API["REST · WebSocket"]
+      CONV["conversation.cooper<br/>🧠 conversation agent"]
+      API["REST · service calls"]
+      AUTOS["Native automations & scripts<br/>tagged [Cooper] · in your UI"]
       DEV["Devices<br/>lights · climate · cameras · locks<br/>pool · energy · irrigation …"]
 
       subgraph agent["Cooper Guardian (HA add-on)"]
-        LOOP["Goal loop<br/>reason → see → act → verify"]
+        ROUTE["Router<br/>inform · act · author · manage"]
         GUARD["Guardrails<br/>auto / confirm / never"]
-        BUDGET["Cost guard<br/>per-hour / per-day caps"]
-        DB[("SQLite<br/>goals · tasks · log")]
+        VALID["Validator<br/>entities & services must exist"]
+        LOG[("Append-only<br/>audit log")]
       end
     end
 
-    CLAUDE[["Anthropic API<br/>Haiku → Sonnet/Opus"]]
+    CLAUDE[["Anthropic API"]]
     OUT["📲 Push notify · 🔊 TTS"]
 
     V --> ASSIST
     C --> ASSIST
-    ASSIST --> INTENT
-    INTENT -->|simple, local| DEV
-    INTENT -->|complex| CONV
-    CONV --> CLAUDE
-    CONV --> API
-    CONV -.->|"hands off agentic requests (bridge)"| LOOP
-
-    LOOP <-->|state · events · camera snapshots| API
-    LOOP -->|reason + vision| CLAUDE
-    LOOP --> GUARD
-    LOOP --> BUDGET
-    GUARD -->|allowed actions| API
+    ASSIST --> CONV
+    CONV --> ROUTE
+    ROUTE --> CLAUDE
+    ROUTE --> GUARD
+    GUARD -->|service calls| API
+    ROUTE -->|authors / edits| VALID
+    VALID -->|writes rules| AUTOS
     API --- DEV
-    LOOP <--> DB
-    LOOP --> OUT
+    AUTOS -->|cheap native triggers| DEV
+    AUTOS -.->|"wake to judge: conversation.process → cooper"| CONV
+    ROUTE --> LOG
+    ROUTE --> OUT
 ```
 
-Two cooperating layers, both inside Home Assistant:
+Cooper is three things wearing one coat:
 
-1. **Voice/chat front-end** — HA Assist with a hybrid agent: local intents handle common commands
-   in milliseconds; Claude handles anything conversational, ambiguous, or multi-step.
-2. **Cooper Guardian add-on** — the novel core: a persistent, goal-driven Claude agent that
-   watches (with **vision**) and acts with **judgment**, gated by **guardrails** and a **cost
-   guard**, with **SQLite** persistence. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+1. **Router** — every utterance hits `conversation.cooper` and gets sorted: answer it, do it, or
+   build something durable for it.
+2. **Compiler** — for anything ongoing, it **writes a real native HA automation or script**.
+   Lifecycle (*today*, *tonight*, *until Monday*, *three times then stop*) is expressed in plain
+   HA constructs — date/time conditions, overnight windows, counter helpers, self-disable — not
+   hidden Cooper flags. A **deterministic validator** guarantees every entity and service in a rule
+   actually exists, plus an advisory check that the rule matches what you asked for. One-shot rules
+   that can no longer fire get cleaned up automatically.
+3. **Judgment oracle** — the rules Cooper writes call **back** to it (`conversation.process` →
+   `conversation.cooper`) for the smart step: *look at the camera, is this a delivery?*
 
-The two are joined by a small **custom integration** (`custom_components/cooper/`) that registers the
-Guardian directly as a Home Assistant **conversation agent**. Set Assist's agent to **Cooper** and
-every utterance goes straight to the Guardian over HTTP — it reasons, acts, and the assistant speaks
-the reply, with conversation **memory** (follow-ups) and **in-chat confirmations** ("unlock the front
-door — yes or no?"). One brain, a direct request/response.
+**Home Assistant is the durable execution substrate** — it stores the rules, runs the triggers, and
+survives restarts. The add-on holds only an **append-only audit log** of what Cooper did; the rules
+themselves live in HA, visible and editable. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Install & setup
 
@@ -148,14 +146,23 @@ supervisor token).
 
 | Doc | What's in it |
 |---|---|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design, the goal-loop, deployment topology, diagrams |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design — routing, rule-authoring, the judgment callback, deployment topology |
 | [USE-CASES.md](docs/USE-CASES.md) | The full catalog of what it can do |
-| [MIGRATING-FROM-AUTOMATIONS.md](docs/MIGRATING-FROM-AUTOMATIONS.md) | What to keep as automations, what to move to Cooper, and the hybrid pattern |
+| [MIGRATING-FROM-AUTOMATIONS.md](docs/MIGRATING-FROM-AUTOMATIONS.md) | What to keep as automations, what to let Cooper author, and the hybrid pattern |
 | [GUARDRAILS.md](docs/GUARDRAILS.md) | Autonomy model — act on safe / confirm risky / never |
 | [PLAN.md](docs/PLAN.md) | Phased build roadmap |
 
 ## Design notes
 
+- **Native, not bespoke:** Cooper doesn't run its own watch loop. It **compiles** your intent into
+  ordinary Home Assistant automations and scripts, so HA's battle-tested engine does the running —
+  cheap triggers, restart-safe, fully visible and editable in your UI.
+- **Grounded in your home:** it reasons over HA **areas** and **device classes**, so requests
+  resolve to the entities that are really there — rename-proof, no name guessing.
+- **Safe by construction:** tiered guardrails (auto reversible / confirm risky with a real yes-no /
+  never forbidden) gate both direct actions and the actions inside any rule it writes; a validator
+  rejects rules referencing entities or services that don't exist. Observe mode by default, with a
+  kill switch (`input_boolean.cooper_pause`).
 - **Hosting:** runs as an always-on HA add-on — LAN-local, low latency to your devices, no
   dependency on the internet for local control.
 - **Keys:** a dedicated, project-specific Anthropic API key + a scoped HA token — never reuse other
