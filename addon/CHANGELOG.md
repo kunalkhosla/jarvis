@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.5
+- **Calendar questions work now.** "What's on the calendar tomorrow?" used to ask for a needless yes/no
+  and then fail — `calendar.get_events` is a response-only service that a normal service call can't run.
+  Added a dedicated `get_calendar` read tool (like the weather forecast) that reads each calendar
+  correctly and returns the events, so Cooper just answers.
+
 ## 1.6.4
 - **Reaper safety:** the dead-rule cleanup now requires BOTH Cooper markers (config id `cooper_*` **and**
   alias `[Cooper] …`) before deleting anything — it can never touch one of your own automations.

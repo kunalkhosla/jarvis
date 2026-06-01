@@ -218,6 +218,35 @@ export class HaClient {
     return { entity: w.entity_id, forecast };
   }
 
+  /** Events from the household calendars over a window. `calendar.get_events` is a RESPONSE-ONLY
+   *  service (SupportsResponse.ONLY) — a plain call_service 400s ("Service call requires responses"),
+   *  so it MUST be hit with `?return_response`. Queries each calendar.* entity (discovered by domain
+   *  when none given) so it never depends on multi-entity support, and returns events keyed by entity.
+   *  `start`/`end` are ISO datetimes; default = now → +7 days. */
+  async getCalendar(start?: string, end?: string, entityIds?: string[]): Promise<Record<string, unknown[]>> {
+    const ids = entityIds?.length
+      ? entityIds
+      : (await this.getStates()).filter((s) => s.entity_id.startsWith("calendar.")).map((s) => s.entity_id);
+    if (!ids.length) return {};
+    const now = new Date();
+    const startIso = start ?? now.toISOString();
+    const endIso = end ?? new Date(now.getTime() + 7 * 864e5).toISOString();
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const d = await this.rest(`/services/calendar/get_events?return_response`, {
+            method: "POST",
+            body: JSON.stringify({ entity_id: id, start_date_time: startIso, end_date_time: endIso }),
+          });
+          return [id, (d as any)?.service_response?.[id]?.events ?? []] as const;
+        } catch {
+          return [id, []] as const;
+        }
+      }),
+    );
+    return Object.fromEntries(results);
+  }
+
   /** Fetch a still JPEG from a camera via HA's camera_proxy, as base64 for Claude vision.
    *  Reolink full-res "*_fluent" streams 500 on snapshot — fall back to the "*_clear" substream. */
   async cameraSnapshot(entityId: string): Promise<{ base64: string; mediaType: "image/jpeg" } | null> {

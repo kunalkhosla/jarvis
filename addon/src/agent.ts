@@ -16,7 +16,8 @@ state. Never invent entities — resolve real entity_ids before acting or author
 
 ROUTE every request to the lightest thing that does the job:
 1. ANSWER a question → read tools (get_live_context / get_history / look_at_camera / get_forecast /
-   web_search) then reply. Weather → get_forecast, NEVER web-search weather.
+   get_calendar / web_search) then reply. Weather → get_forecast, NEVER web-search weather.
+   Schedule/calendar → get_calendar, NEVER call_service calendar.get_events (it fails).
 2. ACT NOW, reversible (lights, fans, media, climate, switches, scenes) → call_service, confirm done.
 3. ACT NOW, risky (locks, alarm arm/disarm, valve, garage/awning close, sirens) → still call_service;
    it asks the user Yes/No and runs ONLY on yes — don't claim success before that. One confirmation
@@ -90,6 +91,8 @@ const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", required: ["cameras"], properties: { cameras: { type: "array", items: { type: "string" } } } } },
   { name: "get_forecast", description: "HA's local weather forecast for the home's exact location. Use this for ANY weather question — never web-search weather. Optional type: daily (default) or hourly.",
     input_schema: { type: "object", properties: { type: { type: "string", enum: ["daily", "hourly"] } } } },
+  { name: "get_calendar", description: "Read upcoming events from the household calendars. Use this for ANY schedule question — 'what's on the calendar', 'what's tomorrow', 'am I free Friday', 'what's coming up'. NEVER use call_service for calendar.get_events: it's a response-only service and will fail. Optional `start`/`end` are ISO datetimes bounding the window (default: now through 7 days out); for 'tomorrow', pass tomorrow 00:00 → 23:59 in LOCAL time using the CURRENT DATETIME you were given. Optional `calendars` limits to specific calendar entity_ids (default: every calendar).",
+    input_schema: { type: "object", properties: { start: { type: "string" }, end: { type: "string" }, calendars: { type: "array", items: { type: "string" } } } } },
   { name: "notify", description: "Send a push notification. 'camera' (entity_id/name) attaches a live photo. 'priority' sets urgency by YOUR judgment of severity: normal=routine FYI, high=wants attention now (visitor/package), critical=genuine safety only (intruder/smoke/flood) — critical bypasses silent & Do-Not-Disturb and sounds the alarm channel.",
     input_schema: { type: "object", required: ["message"], properties: { message: { type: "string" }, camera: { type: "string" }, priority: { type: "string", enum: ["normal", "high", "critical"] } } } },
   { name: "create_automation", description: "Author a NATIVE Home Assistant automation for anything ongoing, conditional, scheduled, or recurring ('alert me when…', 'every evening…', 'if X then Y', 'watch for… 3 times then stop'). HA runs it natively (cheap triggers, survives restarts, visible/editable in the user's Automations UI) — far better than you polling. `id` is a stable slug (prefix 'cooper_'); `config` is the automation body: {alias, trigger:[...], condition?:[...], action:[...], mode?}. Lifecycle is native: time conditions/triggers for 'today'/'until', a counter or `automation.turn_off` (self-disable) for one-shot / N-times. For the SMART step (e.g. 'is this actually a delivery?', 'who is it?', looking at a camera), the action MUST call service `conversation.process` with data {agent_id:'conversation.cooper', text:'<instruction telling Cooper to look at the specific camera, decide, and notify with the photo>'} — the automation thus calls you back to judge on each real trigger. NEVER substitute a blind tts/notify for the look-and-decide step, and COVER THE WHOLE REQUEST: if the user wants to be told / sent a photo, include that callback (or a notify action) — don't drop it. Resolve real entity_ids first with get_live_context (or get_home_map for whole-area requests).",
@@ -192,6 +195,7 @@ function stepNarration(toolUses: Anthropic.ToolUseBlock[]): string | null {
   if (has("call_service")) return "On it.";
   if (has("get_history")) return "Looking back over what happened.";
   if (has("get_forecast")) return "Checking the forecast.";
+  if (has("get_calendar")) return "Checking your calendar.";
   if (has("web_search")) return "Searching.";
   if (has("list_automations") || has("list_scripts")) return "Checking what's set up.";
   if (has("get_home_map") || has("get_live_context")) return "Checking the home.";
@@ -489,6 +493,13 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
         const fc = await ha.getForecast(a.type === "hourly" ? "hourly" : "daily");
         out = fc ? JSON.stringify(fc.forecast.slice(0, 8)) : "no weather entity configured in HA";
         L(`    ${C.cyan}🌤 get_forecast(${a.type ?? "daily"}) -> ${fc ? (fc.forecast.length + " entries") : "none"}${C.reset}`);
+      }
+      else if (t.name === "get_calendar") {
+        const cal = await ha.getCalendar(a.start, a.end, a.calendars);
+        const nonEmpty = Object.fromEntries(Object.entries(cal).filter(([, ev]) => (ev as unknown[]).length));
+        const total = Object.values(cal).reduce((n, ev) => n + (ev as unknown[]).length, 0);
+        out = Object.keys(cal).length ? JSON.stringify(nonEmpty) : "no calendars configured in HA";
+        L(`    ${C.cyan}📅 get_calendar(${Object.keys(cal).length} cal) -> ${total} event(s)${C.reset}`);
       }
       else if (t.name === "notify") {
         // Notify is how Cooper TALKS to you — it always fires, even in observe mode (which only
