@@ -85,6 +85,27 @@ export function collectEntityIds(node: unknown, out: Set<string> = new Set()): S
   return out;
 }
 
+/** If an authored config defers its SMART step back to Cooper (an action calling `conversation.process`
+ *  → `conversation.cooper`), return that callback's instruction text. The author can then run it ONCE,
+ *  read-only, against the live home to confirm the judgment step actually works (and grounds itself on
+ *  real data) before claiming the rule is set up — instead of authoring blind. Null = nothing deferred. */
+export function extractSelfCallback(node: unknown): string | null {
+  if (Array.isArray(node)) {
+    for (const v of node) { const r = extractSelfCallback(v); if (r) return r; }
+    return null;
+  }
+  if (node && typeof node === "object") {
+    const o = node as Record<string, any>;
+    if ((o.service ?? o.action) === "conversation.process") {
+      const data = o.data ?? {};
+      const agent = data.agent_id ?? data.target?.agent_id;
+      if ((!agent || /cooper/i.test(String(agent))) && typeof data.text === "string" && data.text.trim()) return data.text.trim();
+    }
+    for (const v of Object.values(o)) { const r = extractSelfCallback(v); if (r) return r; }
+  }
+  return null;
+}
+
 /** Lint authored notify actions: the mobile-app companion attaches a photo from `data.image`
  *  ("/api/camera_proxy/<cam>"); a bare `data.camera` key is silently ignored. Returns warnings. */
 export function lintNotifyPhotos(node: unknown, out: string[] = []): string[] {

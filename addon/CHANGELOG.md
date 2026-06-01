@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.0
+- **Cooper tests a rule before claiming it works.** When it authors an automation/script whose smart
+  step calls back into Cooper (e.g. "look at the camera and decide", "check tomorrow's calendar"), it now
+  runs that step once — right then, read-only, against your live home — and confirms with the REAL result
+  ("Set up — and to confirm, tomorrow it'd tell you: recycling") instead of a blind "all set." If the step
+  can't actually answer (no data, wrong source), Cooper fixes the rule or tells you what's missing rather
+  than quietly setting up something that never works. The dry-run reads but never sends, changes, or
+  creates anything. No per-scenario logic — it triggers whenever a rule defers a judgment step.
+
 ## 1.6.5
 - **Calendar questions work now.** "What's on the calendar tomorrow?" used to ask for a needless yes/no
   and then fail — `calendar.get_events` is a response-only service that a normal service call can't run.

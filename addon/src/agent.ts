@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Config } from "./config.js";
 import type { HaClient } from "./ha.js";
-import { tierFor, vetConfig, collectServices, collectEntityIds, lintNotifyPhotos } from "./guardrails.js";
+import { tierFor, vetConfig, collectServices, collectEntityIds, lintNotifyPhotos, extractSelfCallback } from "./guardrails.js";
 import type { Budget } from "./budget.js";
 import { C, L, header } from "./log.js";
 
@@ -202,7 +202,12 @@ function stepNarration(toolUses: Anthropic.ToolUseBlock[]): string | null {
   return null;
 }
 
-export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget, hooks?: Hooks, onProgress?: (text: string) => void): Promise<string> {
+// Side-effecting tools neutralized during a verification dry-run (see `dryRun`): the smart step still
+// READS the live home (get_*/look_at_camera/list_*) so it grounds itself, but nothing is actually sent,
+// changed, or authored — so the test is safe and can't recurse into another authoring/verification.
+const DRYRUN_NEUTRALIZED = new Set(["call_service", "notify", "create_automation", "create_script", "create_counter", "delete_automation", "delete_script"]);
+
+export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraContext = "", budget?: Budget, hooks?: Hooks, onProgress?: (text: string) => void, dryRun = false): Promise<string> {
   const anthropic = new Anthropic({ apiKey: cfg.anthropicKey });
   const log: string[] = [];
   let lastConfirmation = ""; // most recent user-facing action result, used as a fallback reply if the agent ends with no text
@@ -214,6 +219,22 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
   // Lazily cache all real entity ids so we can reject hallucinated targets (anti-invention guard).
   let knownIds: Set<string> | null = null;
   const ensureIds = async () => (knownIds ??= new Set((await ha.getStates()).map((s) => s.entity_id)));
+
+  // After authoring a rule that defers its SMART step back to Cooper (a conversation.process self-callback),
+  // run that step ONCE now — read-only against the live home — and return what the rule WOULD produce, so
+  // the author can confirm with the REAL result instead of a blind "all set." This is the general fix for
+  // authoring-blind/over-claiming: the trigger is purely structural (does the config self-callback?) and
+  // the grounding emerges from the agent's own reasoning on real data — no per-use-case logic. Skipped when
+  // this eval is itself a dry-run (the neutralized create_* can't author, so there's nothing to verify).
+  const selfTest = async (config: unknown): Promise<string> => {
+    if (dryRun) return "";
+    const cb = extractSelfCallback(config);
+    if (!cb) return "";
+    try {
+      const verified = await runGoal(cfg, ha, cb, "", budget, hooks, undefined, true);
+      return `\n\nSELF-TEST — I ran the rule's smart step once just now against live data (current conditions may differ from when it actually triggers): ${verified.slice(0, 600)}\nIf that shows it works, confirm to the user with the REAL result. If it shows the rule can't answer (no data, wrong source), fix it with the SAME id or tell the user what's missing — don't claim it's all set.`;
+    } catch (e) { return `\n\n(couldn't dry-run the smart step to verify: ${String(e).slice(0, 150)})`; }
+  };
 
   // Ground every eval in HA's REAL location + the CURRENT datetime (so authored time-based automations
   // use the right "now": "at 11:45pm", "today", "every evening") and the REAL notify targets it can put
@@ -293,6 +314,17 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
     for (const t of toolUses) {
       const a = t.input as any;
       let out = "";
+      // VERIFICATION DRY-RUN: this eval IS the post-authoring self-test of a rule's smart step. Let reads
+      // and finish run normally (they're how it grounds + reports), but intercept every side-effecting
+      // tool so nothing is actually sent/changed/created during the test.
+      if (dryRun && DRYRUN_NEUTRALIZED.has(t.name)) {
+        if (t.name === "notify") { lastConfirmation = String(a.message ?? lastConfirmation); out = `[dry-run] would notify: "${String(a.message ?? "")}"`; }
+        else if (t.name === "call_service") out = `[dry-run] would call ${a.domain}.${a.service}`;
+        else out = `[dry-run] ${t.name} skipped — verification pass, not creating or deleting anything`;
+        L(`    ${C.gray}🧪 [dry-run] ${t.name} -> ${out}${C.reset}`);
+        results.push({ type: "tool_result", tool_use_id: t.id, content: out });
+        continue;
+      }
       if (t.name === "finish") {
         L(`${C.green}${C.bold}✔ finish:${C.reset}${C.green} ${a.summary}${C.reset}`);
         // If Cooper already wrote its answer as text (streamed), the finish summary is a DUPLICATE — don't
@@ -335,7 +367,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
                 const sem = await semanticVerify(cfg, goal, cfg2);
                 if (!sem.ok && sem.issues[0]) note = ` One thing to double-check: ${sem.issues[0]} — if that's off, call create_automation again with the SAME id to fix it; otherwise just confirm and finish.`;
               }
-              out = `created automation ${id} ("${cfg2.alias}") — live.${note || " Confirm to the user and finish."}`;
+              out = `created automation ${id} ("${cfg2.alias}") — live.${note || " Confirm to the user and finish."}` + await selfTest(cfg2);
             }
             catch (e) { out = `ERROR creating automation: ${String(e).slice(0, 200)}`; }
           }
@@ -378,7 +410,7 @@ export async function runGoal(cfg: Config, ha: HaClient, goal: string, extraCont
                 const sem = await semanticVerify(cfg, goal, sc);
                 if (!sem.ok && sem.issues[0]) note = ` One thing to double-check: ${sem.issues[0]} — fix with create_script (same id) if off, else just confirm.`;
               }
-              out = `created script ${id} ("${sc.alias}") — run with script.turn_on entity_id script.${id}.${note || " Confirm to the user and finish."}`;
+              out = `created script ${id} ("${sc.alias}") — run with script.turn_on entity_id script.${id}.${note || " Confirm to the user and finish."}` + await selfTest(sc);
             }
             catch (e) { out = `ERROR creating script: ${String(e).slice(0, 200)}`; }
           }
